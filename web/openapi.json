@@ -1,0 +1,240 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Go Loose API",
+    "version": "0.1.0",
+    "description": "Multi-tenant API-key management and runtime authorization."
+  },
+  "servers": [{"url": "/"}],
+  "components": {
+    "securitySchemes": {
+      "session": {"type": "apiKey", "in": "cookie", "name": "go_loose_session"},
+      "apiKey": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
+      "clientBasic": {"type": "http", "scheme": "basic"},
+      "userBearer": {"type": "http", "scheme": "bearer"}
+    },
+    "schemas": {
+      "Error": {"type": "object", "properties": {"error": {"type": "string"}}},
+      "AuthorizationRequest": {
+        "type": "object",
+        "required": ["application", "method", "path"],
+        "properties": {
+          "tenant": {"type": "string", "example": "nmbs"},
+          "application": {"type": "string", "example": "guess"},
+          "method": {"type": "string", "example": "GET"},
+          "path": {"type": "string", "example": "/api/guesses"},
+          "host": {"type": "string", "example": "nmbs.guess.local"}
+        }
+      },
+      "AuthorizationResponse": {
+        "type": "object",
+        "properties": {
+          "allowed": {"type": "boolean"},
+          "reason": {"type": "string"},
+          "tenant_id": {"type": "string", "format": "uuid"},
+          "tenant_slug": {"type": "string"},
+          "application_id": {"type": "string", "format": "uuid"},
+          "application_slug": {"type": "string"},
+          "api_key_id": {"type": "string", "format": "uuid"},
+          "api_key_name": {"type": "string"}
+        }
+      }
+    }
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "Monitoring"
+        ],
+        "summary": "Liveness check",
+        "responses": {"200": {"description": "Healthy"}}
+      }
+    },
+    "/install": {
+      "get": {
+        "tags": ["Installation"],
+        "summary": "Show the first-run installer",
+        "responses": {"200": {"description": "Installer form"}, "303": {"description": "Already installed"}}
+      },
+      "post": {
+        "tags": ["Installation"],
+        "summary": "Persist Google OIDC configuration and optional demo data",
+        "requestBody": {"required": true, "content": {"application/x-www-form-urlencoded": {"schema": {"type": "object", "required": ["csrf_token", "oidc_client_id", "oidc_client_secret"], "properties": {"csrf_token": {"type": "string"}, "oidc_client_id": {"type": "string"}, "oidc_client_secret": {"type": "string", "format": "password"}, "seed_demo": {"type": "boolean"}}}}}},
+        "responses": {"303": {"description": "Installation completed; continue to Google OIDC login"}, "409": {"description": "Already installed"}, "502": {"description": "Google OIDC discovery failed"}}
+      }
+    },
+    "/auth/password": {
+      "post": {
+        "tags": ["User Action"],
+        "summary": "Authenticate a database-backed user",
+        "requestBody": {"required": true, "content": {"application/x-www-form-urlencoded": {"schema": {"type": "object", "required": ["email", "password"], "properties": {"email": {"type": "string", "format": "email"}, "password": {"type": "string", "format": "password"}, "return": {"type": "string", "format": "uri"}}}}}},
+        "responses": {"303": {"description": "Login succeeded"}, "401": {"description": "Invalid email or password"}, "429": {"description": "Temporarily rate limited"}}
+      }
+    },
+    "/api/v1/authorize": {
+      "post": {
+        "tags": [
+          "Authorization Management"
+        ],
+        "summary": "Authorize an incoming API request",
+        "security": [{"apiKey": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuthorizationRequest"}}}},
+        "responses": {
+          "200": {"description": "Authorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuthorizationResponse"}}}},
+          "401": {"description": "Missing or invalid key", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "403": {"description": "Key not allowed for this request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuthorizationResponse"}}}}
+        }
+      }
+    },
+    "/api/v1/dashboard": {
+      "get": {
+        "tags": [
+          "Dashboard Management"
+        ],
+        "summary": "Get management console data",
+        "security": [{"session": []}],
+        "responses": {"200": {"description": "Dashboard data"}}
+      }
+    },
+    "/api/v1/tenants": {
+      "post": {
+        "tags": [
+          "Tenant Management"
+        ],
+        "summary": "Create a tenant",
+        "security": [{"session": []}],
+        "responses": {"201": {"description": "Tenant created"}}
+      }
+    },
+    "/api/v1/applications": {
+      "post": {
+        "tags": [
+          "Application Management"
+        ],
+        "summary": "Register an application",
+        "security": [{"session": []}],
+        "responses": {"201": {"description": "Application registered"}}
+      }
+    },
+    "/api/v1/keys": {
+      "post": {
+        "tags": [
+          "Key Management"
+        ],
+        "summary": "Issue an API key",
+        "security": [{"session": []}],
+        "responses": {"201": {"description": "Key created; plaintext secret is returned once"}}
+      }
+    },
+    "/api/v1/keys/{id}/revoke": {
+      "post": {
+        "tags": [
+          "Key Management"
+        ],
+        "summary": "Revoke an API key",
+        "security": [{"session": []}],
+        "parameters": [{"in": "path", "name": "id", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+        "responses": {"204": {"description": "Key revoked"}}
+      }
+    },
+    "/api/v1/contracts": {
+      "post": {
+        "tags": [
+          "Contract Management"
+        ],
+        "summary": "Import a pasted contract or scan an OpenAPI URL",
+        "security": [{"session": []}],
+        "responses": {"201": {"description": "Contract imported"}}
+      }
+    },
+    "/connect/authorize": {
+      "get": {
+        "tags": [
+          "User Action"
+        ],
+        "summary": "Start hosted client application login",
+        "parameters": [
+          {"in": "query", "name": "response_type", "required": true, "schema": {"type": "string", "const": "code"}},
+          {"in": "query", "name": "client_id", "required": true, "schema": {"type": "string"}},
+          {"in": "query", "name": "redirect_uri", "required": true, "schema": {"type": "string", "format": "uri"}},
+          {"in": "query", "name": "state", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"302": {"description": "Redirect to login or exact client callback"}}
+      }
+    },
+    "/connect/token": {
+      "post": {
+        "tags": [
+          "User Action"
+        ],
+        "summary": "Exchange a one-time authorization code",
+        "security": [{"clientBasic": []}],
+        "requestBody": {"required": true, "content": {"application/x-www-form-urlencoded": {"schema": {"type": "object"}}}},
+        "responses": {"200": {"description": "Opaque client user session"}, "401": {"description": "Invalid code or client credentials"}}
+      }
+    },
+    "/connect/userinfo": {
+      "get": {
+        "tags": [
+          "User Action"
+        ],
+        "summary": "Validate a client user session",
+        "security": [{"userBearer": []}],
+        "responses": {"200": {"description": "Authenticated client user"}, "401": {"description": "Invalid, revoked, or expired session"}}
+      }
+    },
+    "/connect/logout": {
+      "post": {
+        "tags": [
+          "User Action"
+        ],
+        "summary": "Revoke a client user session",
+        "security": [{"userBearer": []}],
+        "responses": {"204": {"description": "Session revoked"}}
+      }
+    },
+    "/api/v1/applications/{id}/client-config": {
+      "post": {
+        "tags": [
+          "Application Management"
+        ],
+        "summary": "Configure exact redirect URIs and rotate the client secret",
+        "security": [{"session": []}],
+        "parameters": [{"in": "path", "name": "id", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+        "responses": {"200": {"description": "Configuration saved; client secret returned once"}}
+      }
+    },
+    "/api/v1/users": {
+      "post": {
+        "tags": [
+          "User Management"
+        ],
+        "summary": "Invite a tenant user",
+        "security": [{"session": []}],
+        "responses": {"201": {"description": "User invited"}}
+      }
+    },
+    "/api/v1/users/{id}/access": {
+      "put": {
+        "tags": [
+          "User Management"
+        ],
+        "summary": "Set tenant role and application access",
+        "security": [{"session": []}],
+        "parameters": [{"in": "path", "name": "id", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+        "responses": {"204": {"description": "Access updated"}}
+      }
+    },
+    "/api/v1/users/{id}/approve": {
+      "post": {
+        "tags": ["User Management"],
+        "summary": "Approve a waiting-room user into a tenant",
+        "description": "Requires a system administrator session.",
+        "security": [{"session": []}],
+        "parameters": [{"in": "path", "name": "id", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+        "responses": {"204": {"description": "User approved"}, "404": {"description": "User or permission not found"}}
+      }
+    }
+  }
+}

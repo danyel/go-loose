@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-theme="tokyo" data-mode="dark">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Install Go Loose</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body class="login-page">
+  <div class="login-glow"></div>
+  <main class="terminal installer">
+    <div class="terminal-bar"><span></span><span></span><span></span><strong>goloose@installer:~</strong></div>
+    <div class="terminal-body">
+      <p class="eyebrow">FIRST-RUN INSTALLER</p>
+      <h1>Initialize<br><span>Go Loose.</span></h1>
+      <p class="muted">Configure Google identity and optionally create the Guess demonstration tenants. The client secret is encrypted before it reaches PostgreSQL.</p>
+      <form action="/install" method="post" class="installer-form">
+        <input type="hidden" name="csrf_token" value="{{CSRF_TOKEN}}">
+        <label>Google OAuth client ID<input name="oidc_client_id" value="{{GOOGLE_CLIENT_ID}}" required></label>
+        <label>Google OAuth client secret<input type="password" name="oidc_client_secret" autocomplete="new-password" required></label>
+        <label>Authorized callback URL<input value="{{CALLBACK_URL}}" readonly></label>
+        <label class="seed-option"><input type="checkbox" name="seed_demo" checked><span>Seed NMBS and YPTO Guess demo data</span></label>
+        <button type="submit">INSTALL GO LOOSE</button>
+      </form>
+      <p class="muted">In Google Cloud Console, add the callback URL above under Authorized redirect URIs. After installation you will continue to Google, then return to Go Loose with a secure signed session.</p>
+    </div>
+  </main>
+  <script>const t=localStorage.getItem('gl-theme')||'tokyo',m=localStorage.getItem('gl-mode')||'dark';document.documentElement.dataset.theme=t;document.documentElement.dataset.mode=m</script>
+</body>
+</html>

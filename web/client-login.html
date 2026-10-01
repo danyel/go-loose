@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en" data-theme="tokyo" data-mode="dark">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{TENANT_NAME}} login · Go Loose</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body class="login-page">
+  <div class="login-glow"></div>
+  <main class="terminal client-terminal">
+    <div class="terminal-bar"><span></span><span></span><span></span><strong>goloose@identity-broker:~</strong></div>
+    <div class="terminal-body">
+      <p class="eyebrow">{{APPLICATION_NAME}} · SECURE ACCESS</p>
+      <h1>{{TENANT_NAME}} login.<br><span>Continue securely.</span></h1>
+      <p><span class="prompt">identity@{{TENANT_NAME}}:~$</span> verify access with your organization</p>
+      <p class="muted">Go Loose will return you to {{APPLICATION_NAME}} after your identity and application access are verified.</p>
+      <form class="password-login" style="{{LOCAL_STYLE}}" action="/auth/password" method="post">
+        <input type="hidden" name="csrf_token" value="{{CSRF_TOKEN}}">
+        <input type="hidden" name="return" value="{{RETURN_URL}}">
+        <label>Email<input type="email" name="email" autocomplete="username" required></label>
+        <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
+        <button type="submit">LOGIN TO {{APPLICATION_NAME}}</button>
+      </form>
+      <div style="{{SSO_STYLE}}"><p class="login-divider">or use your organization</p>
+      <a class="terminal-login" href="{{LOGIN_URL}}"><span>›</span> CONTINUE WITH SSO</a></div>
+      <p class="cursor-line"><span class="prompt">identity@go-loose:~$</span> <span class="cursor">█</span></p>
+    </div>
+  </main>
+  <script>const t=localStorage.getItem('gl-theme')||'tokyo',m=localStorage.getItem('gl-mode')||'dark';document.documentElement.dataset.theme=t;document.documentElement.dataset.mode=m</script>
+</body>
+</html>

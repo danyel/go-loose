@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" data-theme="tokyo" data-mode="dark">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Go Loose · Login</title><link rel="stylesheet" href="/assets/style.css"></head>
+<body class="login-page">
+  <div class="login-glow"></div>
+  <main class="terminal">
+    <div class="terminal-bar"><span></span><span></span><span></span><strong>goloose@access-plane:~</strong></div>
+    <div class="terminal-body">
+      <pre class="ascii"> ██████╗  ██████╗     ██╗      ██████╗  ██████╗ ███████╗███████╗
+██╔════╝ ██╔═══██╗    ██║     ██╔═══██╗██╔═══██╗██╔════╝██╔════╝
+██║  ███╗██║   ██║    ██║     ██║   ██║██║   ██║███████╗█████╗
+██║   ██║██║   ██║    ██║     ██║   ██║██║   ██║╚════██║██╔══╝
+╚██████╔╝╚██████╔╝    ███████╗╚██████╔╝╚██████╔╝███████║███████╗
+ ╚═════╝  ╚═════╝     ╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝</pre>
+      <p><span class="prompt">goloose@access-plane:~$</span> initialize secure session</p>
+      <p class="muted">Sign in with a database account or continue through your organization's identity provider.</p>
+      <form class="password-login" style="{{LOCAL_STYLE}}" action="/auth/password" method="post">
+        <input type="hidden" name="csrf_token" value="{{CSRF_TOKEN}}">
+        <label>Email<input type="email" name="email" autocomplete="username" required></label>
+        <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
+        <button type="submit">LOGIN</button>
+      </form>
+      <div style="{{SSO_STYLE}}"><p class="login-divider">or use your organization</p>
+      <a class="terminal-login" href="/auth/start"><span>›</span> LOGIN WITH SSO</a></div>
+      <p class="cursor-line"><span class="prompt">goloose@access-plane:~$</span> <span class="cursor">█</span></p>
+    </div>
+  </main>
+  <script>const t=localStorage.getItem('gl-theme')||'tokyo',m=localStorage.getItem('gl-mode')||'dark';document.documentElement.dataset.theme=t;document.documentElement.dataset.mode=m</script>
+</body>
+</html>
