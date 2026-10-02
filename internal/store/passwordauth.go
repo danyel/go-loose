@@ -34,6 +34,18 @@ func (s *Store) PasswordUser(ctx context.Context, email string) (User, string, e
 	return user, passwordHash.String, err
 }
 
+func (s *Store) HasTenantAccess(ctx context.Context, userID, tenantSlug string) (bool, error) {
+	var allowed bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM memberships m
+			JOIN tenants t ON t.id = m.tenant_id
+			WHERE m.user_id = $1 AND t.slug = $2
+		)`, userID, tenantSlug).Scan(&allowed)
+	return allowed, err
+}
+
 func (s *Store) RecordLogin(ctx context.Context, userID *string, email, remoteAddress string, successful bool, reason string) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO user_login_events(user_id, email, remote_address, successful, reason)

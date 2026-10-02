@@ -26,6 +26,22 @@ func (s *Server) tenantAuthURL(tenantSlug, requestURI string) string {
 	return base.Scheme + "://" + s.tenantAuthHost(tenantSlug) + requestURI
 }
 
+func (s *Server) requestTenantSlug(host string) string {
+	hostname := strings.ToLower(host)
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		hostname = strings.ToLower(parsedHost)
+	}
+	suffix := "." + s.cfg.AuthDomain
+	if !strings.HasSuffix(hostname, suffix) {
+		return ""
+	}
+	slug := strings.TrimSuffix(hostname, suffix)
+	if slug == "" || strings.Contains(slug, ".") {
+		return ""
+	}
+	return slug
+}
+
 func (s *Server) validateLoginReturn(ctx context.Context, raw string) (string, error) {
 	target, err := url.Parse(raw)
 	if err != nil || !target.IsAbs() || target.Path != "/connect/authorize" || target.Fragment != "" || target.User != nil {
@@ -103,13 +119,13 @@ func (s *Server) renderClientLogin(w http.ResponseWriter, r *http.Request) {
 		"{{RETURN_URL}}", html.EscapeString(validatedReturn),
 		"{{CSRF_TOKEN}}", html.EscapeString(csrfToken),
 		"{{LOCAL_STYLE}}", hiddenStyle(!s.cfg.LocalLogin),
-		"{{SSO_STYLE}}", hiddenStyle(!s.hasOIDC()),
+		"{{SSO_STYLE}}", hiddenStyle(true),
 	).Replace(string(content))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(page))
 }
 
-func (s *Server) renderManagementLogin(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) renderManagementLogin(w http.ResponseWriter, r *http.Request) {
 	content, err := web.Files.ReadFile("login.html")
 	if err != nil {
 		http.Error(w, "login page unavailable", http.StatusInternalServerError)
@@ -120,10 +136,23 @@ func (s *Server) renderManagementLogin(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "could not prepare login", http.StatusInternalServerError)
 		return
 	}
+	tenantSlug := s.requestTenantSlug(r.Host)
+	tenantLogin := tenantSlug != ""
+	loginContext := "SYSTEM ADMINISTRATION"
+	loginMessage := "Sign in through the configured identity provider. System administration is not tied to a tenant."
+	passwordButton := "LOGIN"
+	if tenantLogin {
+		loginContext = strings.ToUpper(tenantSlug) + " · TENANT ADMINISTRATION"
+		loginMessage = "Sign in with your tenant database account."
+		passwordButton = "LOGIN TO " + strings.ToUpper(tenantSlug)
+	}
 	page := strings.NewReplacer(
 		"{{CSRF_TOKEN}}", html.EscapeString(csrfToken),
-		"{{LOCAL_STYLE}}", hiddenStyle(!s.cfg.LocalLogin),
-		"{{SSO_STYLE}}", hiddenStyle(!s.hasOIDC()),
+		"{{LOGIN_CONTEXT}}", html.EscapeString(loginContext),
+		"{{LOGIN_MESSAGE}}", html.EscapeString(loginMessage),
+		"{{PASSWORD_BUTTON}}", html.EscapeString(passwordButton),
+		"{{LOCAL_STYLE}}", hiddenStyle(!tenantLogin || !s.cfg.LocalLogin),
+		"{{SSO_STYLE}}", hiddenStyle(tenantLogin || !s.hasOIDC()),
 	).Replace(string(content))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(page))

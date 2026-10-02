@@ -9,7 +9,7 @@ Go Loose can host login for browser-facing Go applications. Your application nev
 3. Save and copy the client secret. It is shown once.
 4. Open **Users**, invite the user by the email returned by the IdP, and choose **Manage** to grant access to the application.
 
-For database login, the invitation also requires an initial password. The same tenant login screen supports both database credentials and SSO.
+The invitation requires an initial password. Tenant login hosts accept database credentials only; SSO is reserved for system administration on the bare authentication domain.
 
 Saving client configuration rotates the secret. Callback URLs require HTTPS, except `localhost` and `127.0.0.1` while Go Loose development login is enabled.
 
@@ -80,16 +80,16 @@ Each tenant has its own login origin:
 https://<tenant-slug>.<GO_LOOSE_AUTH_DOMAIN>
 ```
 
-For tenant `nmbs` with `GO_LOOSE_AUTH_DOMAIN=auth.local`, configure the Go client with:
+For tenant `nmbs` with `GO_LOOSE_AUTH_DOMAIN=auth.dev`, configure the Go client with:
 
 ```go
-BaseURL: "http://nmbs.auth.local:18080"
+BaseURL: "http://nmbs.auth.dev:18080"
 ```
 
 For local development, add the tenant hostname to `/etc/hosts`:
 
 ```text
-127.0.0.1 nmbs.auth.local
+127.0.0.1 nmbs.auth.dev
 ```
 
 Production should configure wildcard DNS and TLS for `*.auth.example.com`, route those hosts to Go Loose, and use:

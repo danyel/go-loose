@@ -12,15 +12,16 @@
 ██║   ██║██║   ██║    ██║     ██║   ██║██║   ██║╚════██║██╔══╝
 ╚██████╔╝╚██████╔╝    ███████╗╚██████╔╝╚██████╔╝███████║███████╗
  ╚═════╝  ╚═════╝     ╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝</pre>
+      <p class="eyebrow">{{LOGIN_CONTEXT}}</p>
       <p><span class="prompt">goloose@access-plane:~$</span> initialize secure session</p>
-      <p class="muted">Sign in with a database account or continue through your organization's identity provider.</p>
+      <p class="muted">{{LOGIN_MESSAGE}}</p>
       <form class="password-login" style="{{LOCAL_STYLE}}" action="/auth/password" method="post">
         <input type="hidden" name="csrf_token" value="{{CSRF_TOKEN}}">
         <label>Email<input type="email" name="email" autocomplete="username" required></label>
         <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
-        <button type="submit">LOGIN</button>
+        <button type="submit">{{PASSWORD_BUTTON}}</button>
       </form>
-      <div style="{{SSO_STYLE}}"><p class="login-divider">or use your organization</p>
+      <div style="{{SSO_STYLE}}">
       <a class="terminal-login" href="/auth/start"><span>›</span> LOGIN WITH SSO</a></div>
       <p class="cursor-line"><span class="prompt">goloose@access-plane:~$</span> <span class="cursor">█</span></p>
     </div>

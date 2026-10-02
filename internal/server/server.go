@@ -195,15 +195,11 @@ func (s *Server) serveEmbedded(w http.ResponseWriter, name string) {
 }
 
 func (s *Server) authStart(w http.ResponseWriter, r *http.Request) {
-	target := "/"
-	if requested := r.URL.Query().Get("return"); requested != "" {
-		validated, err := s.validateLoginReturn(r.Context(), requested)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid client login return URL")
-			return
-		}
-		target = validated
+	if r.URL.Query().Get("return") != "" || s.requestTenantSlug(r.Host) != "" {
+		http.NotFound(w, r)
+		return
 	}
+	target := "/"
 	state, err := s.newLoginState(target)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not start login")
@@ -610,7 +606,8 @@ func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 		}
 		sourceURL, sourceErr := url.Parse(source)
 		baseURL, baseErr := url.Parse(s.cfg.BaseURL)
-		if sourceErr != nil || baseErr != nil || sourceURL.Scheme != baseURL.Scheme || sourceURL.Host != baseURL.Host {
+		if sourceErr != nil || baseErr != nil || sourceURL.Scheme != baseURL.Scheme ||
+			!strings.EqualFold(sourceURL.Host, r.Host) {
 			writeError(w, http.StatusForbidden, "same-origin request required")
 			return
 		}

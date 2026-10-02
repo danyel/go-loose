@@ -7,25 +7,19 @@ Go Loose supports local email/password accounts stored in PostgreSQL. Passwords 
 On a fresh Compose deployment, use `/install` and keep **Seed NMBS and YPTO Guess demo data** selected. The complete credential table is in the [installation guide](installation.md). The two primary interview accounts are:
 
 ```text
-interview@nmbs.auth.local / admin123
-interview@ypto.auth.local / admin123
+interview@nmbs.auth.dev / admin123
+interview@ypto.auth.dev / admin123
 ```
 
-For tenant application login, add `127.0.0.1 nmbs.auth.local ypto.auth.local` to `/etc/hosts`.
+For system-administrator and tenant login, add `127.0.0.1 auth.dev nmbs.auth.dev ypto.auth.dev` to `/etc/hosts`.
 
 ```text
-http://nmbs.auth.local:8080
+https://nmbs.auth.dev
 ```
 
-If alternate ports are needed:
-
-```bash
-GO_LOOSE_PORT=18080 \
-GO_LOOSE_POSTGRES_PORT=15432 \
-docker compose up --build
-```
-
-Then use `http://localhost:18080/login` and `http://nmbs.auth.local:18080`.
+Use `https://auth.dev/login` for system-administrator SSO and
+`https://nmbs.auth.dev/login` for tenant database login. Browser TLS is
+terminated by the shared infrastructure Traefik using its local CA certificate.
 
 ## Configuration
 
@@ -35,7 +29,7 @@ GO_LOOSE_LOCAL_ADMIN_EMAIL=admin@example.com              # optional bootstrap
 GO_LOOSE_LOCAL_ADMIN_PASSWORD=<at-least-12-characters>    # optional bootstrap
 ```
 
-`GO_LOOSE_LOCAL_LOGIN=true` enables all database-backed users. A bootstrap account is created only when `GO_LOOSE_LOCAL_ADMIN_PASSWORD` is non-empty; its password is applied only when the account has no password hash. Changing the environment variable later does not silently overwrite an existing database password. If a bootstrap account is required, inject its password from a secret manager and never document a production credential.
+`GO_LOOSE_LOCAL_LOGIN=true` enables database-backed users on tenant hostnames. A bootstrap account is created only when `GO_LOOSE_LOCAL_ADMIN_PASSWORD` is non-empty; its password is applied only when the account has no password hash. Changing the environment variable later does not silently overwrite an existing database password. If a bootstrap account is required, inject its password from a secret manager and never document a production credential.
 
 ## Creating client users
 
@@ -45,7 +39,7 @@ GO_LOOSE_LOCAL_ADMIN_PASSWORD=<at-least-12-characters>    # optional bootstrap
 4. Choose **Manage** for that user and grant the required applications.
 5. Give the initial credential to the user through a secure channel.
 
-The user can then sign in on `<tenant>.auth.local` or the production tenant auth hostname. Re-inviting an existing email explicitly replaces its password and display name.
+The user can then sign in on `<tenant>.auth.dev` or the production tenant auth hostname. Re-inviting an existing email explicitly replaces its password and display name.
 
 ## Brute-force and audit behavior
 

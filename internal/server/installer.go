@@ -100,10 +100,10 @@ func buildDemoUsers() ([]store.DemoUser, error) {
 	specs := []struct {
 		email, name, password, tenant string
 	}{
-		{"interview@nmbs.auth.local", "NMBS Interview", "admin123", "nmbs"},
-		{"interview@ypto.auth.local", "YPTO Interview", "admin123", "ypto"},
-		{"reviewer@nmbs.auth.local", "NMBS Reviewer", "Demo-Nmbs-2026!", "nmbs"},
-		{"reviewer@ypto.auth.local", "YPTO Reviewer", "Demo-Ypto-2026!", "ypto"},
+		{"interview@nmbs.auth.dev", "NMBS Interview", "admin123", "nmbs"},
+		{"interview@ypto.auth.dev", "YPTO Interview", "admin123", "ypto"},
+		{"reviewer@nmbs.auth.dev", "NMBS Reviewer", "Demo-Nmbs-2026!", "nmbs"},
+		{"reviewer@ypto.auth.dev", "YPTO Reviewer", "Demo-Ypto-2026!", "ypto"},
 	}
 	result := make([]store.DemoUser, 0, len(specs))
 	for _, spec := range specs {

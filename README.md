@@ -8,14 +8,17 @@ Go Loose is a multi-tenant API-key control plane for Go HTTP services. It gives 
 docker compose up --build
 ```
 
-Open <http://localhost:8080>. The Compose setup deliberately enables database login and private OpenAPI URL scanning for local development. Never use unrestricted private URL scanning in production.
+Start the shared TLS proxy using `/home/dnoulet/go/infrasctruture`, add
+`127.0.0.1 auth.dev nmbs.auth.dev ypto.auth.dev` to `/etc/hosts`, then open
+<https://auth.dev>. The Compose setup deliberately enables database login and
+private OpenAPI URL scanning for local development. Never use unrestricted
+private URL scanning in production.
 
-On a fresh database, open <http://localhost:8080/install>, enter the Google OAuth client secret from Google Cloud Console, and optionally seed the NMBS and YPTO Guess demonstration data. The CMS Demo client ID and callback URL are prefilled. See the [installation guide](docs/installation.md) for Google setup, first-admin behavior, waiting-room approval, and all demo credentials.
+On a fresh database, open <https://auth.dev/install>, enter the Google OAuth client secret from Google Cloud Console, and optionally seed the NMBS and YPTO Guess demonstration data. The CMS Demo client ID and callback URL are prefilled. See the [installation guide](docs/installation.md) for Google setup, first-admin behavior, waiting-room approval, and all demo credentials.
 
-Hosted user login for that tenant is served from `http://nmbs.auth.local:8080`; add `127.0.0.1 nmbs.auth.local` to `/etc/hosts` for local browser testing.
+The bare `auth.dev` host is reserved for system-administrator SSO. Tenant administrators use database credentials on their tenant host, such as `https://nmbs.auth.dev`.
 
-If port 8080 is occupied, run `GO_LOOSE_PORT=18080 docker compose up --build` and open <http://localhost:18080>.
-If PostgreSQL port 5432 is occupied, also set `GO_LOOSE_POSTGRES_PORT=15432`.
+If PostgreSQL port 5433 is occupied, set `GO_LOOSE_POSTGRES_PORT=15432`.
 
 The first Google SSO user becomes system administrator. Later SSO users remain in a waiting room until the system administrator assigns a tenant, role, and application access. Tenant administrators can manage only their own tenants.
 

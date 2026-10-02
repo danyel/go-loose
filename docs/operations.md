@@ -17,17 +17,17 @@ https://<go-loose-host>/auth/callback
 The web installer is preferred. Environment configuration remains available for existing or fully automated deployments:
 
 ```dotenv
-GO_LOOSE_BASE_URL=https://nmbs.goloose.local
+GO_LOOSE_BASE_URL=https://auth.example.com
 GO_LOOSE_AUTH_DOMAIN=auth.example.com
 GO_LOOSE_OIDC_ISSUER=https://id.example.com/realms/platform
 GO_LOOSE_OIDC_CLIENT_ID=go-loose
 GO_LOOSE_OIDC_CLIENT_SECRET=<from-secret-manager>
-GO_LOOSE_OIDC_REDIRECT_URL=https://nmbs.goloose.local/auth/callback
+GO_LOOSE_OIDC_REDIRECT_URL=https://auth.example.com/auth/callback
 GO_LOOSE_ALLOWED_EMAIL_DOMAINS=example.com
 GO_LOOSE_DEV_LOGIN=false
 ```
 
-Client applications are served on `https://<tenant>.auth.example.com`; configure wildcard DNS and TLS for `*.auth.example.com`. The OIDC callback host and `GO_LOOSE_BASE_URL` must be inside the configured auth domain so the callback can issue the shared tenant-login cookie.
+System-administrator SSO is served on `https://auth.example.com`. Client applications and tenant password login use `https://<tenant>.auth.example.com`; configure wildcard DNS and TLS for `*.auth.example.com`.
 
 Database authentication is controlled by `GO_LOOSE_LOCAL_LOGIN`. It may remain enabled for seeded or invited users without creating a bootstrap account. Set `GO_LOOSE_LOCAL_ADMIN_PASSWORD` only when compatibility bootstrap behavior is explicitly required, and provide it through a secret manager.
 

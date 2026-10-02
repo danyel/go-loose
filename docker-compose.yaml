@@ -23,15 +23,16 @@ services:
         condition: service_healthy
     environment:
       GO_LOOSE_ADDR: ":8080"
-      GO_LOOSE_BASE_URL: "http://localhost:${GO_LOOSE_PORT:-8080}"
-      GO_LOOSE_AUTH_DOMAIN: "auth.local"
+      GO_LOOSE_BASE_URL: "https://auth.dev"
+      GO_LOOSE_AUTH_DOMAIN: "auth.dev"
+      GO_LOOSE_OIDC_REDIRECT_URL: "https://auth.dev/auth/callback"
       GO_LOOSE_DATABASE_URL: "postgres://goloose:goloose@postgres:5432/goloose?sslmode=disable"
       GO_LOOSE_SESSION_SECRET: "local-development-secret-change-me-now"
       GO_LOOSE_DEV_LOGIN: "false"
       GO_LOOSE_LOCAL_LOGIN: "true"
       GO_LOOSE_ALLOW_PRIVATE_CONTRACT_URLS: "true"
-    ports:
-      - "${GO_LOOSE_PORT:-8081}:8080"
+    expose:
+      - "8080"
     healthcheck:
       test: ["CMD", "/go-loose", "-healthcheck"]
       interval: 10s
@@ -39,9 +40,15 @@ services:
       retries: 5
       start_period: 10s
     networks:
-      - go_loose_network
+      go_loose_network: {}
+      local_dev_edge:
+        aliases:
+          - go-loose
 
 volumes:
   postgres-data2:
 networks:
   go_loose_network:
+  local_dev_edge:
+    external: true
+    name: local-dev-edge

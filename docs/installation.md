@@ -8,10 +8,15 @@ Start Go Loose with PostgreSQL and a stable `GO_LOOSE_SESSION_SECRET` of at leas
 docker compose up --build
 ```
 
-Open `http://localhost:8080/install`. The installer asks for a Google OAuth client ID and client secret. In Google Cloud Console, configure this authorized redirect URI before submitting:
+Start the shared Traefik and certificate setup documented in
+`/home/dnoulet/go/infrasctruture/docs/APPLICATIONS.md`, add
+`127.0.0.1 auth.dev nmbs.auth.dev ypto.auth.dev` to `/etc/hosts`, then open
+`https://auth.dev/install`. The installer asks for a Google OAuth client ID and
+client secret. In Google Cloud Console, configure this authorized redirect URI
+before submitting:
 
 ```text
-http://localhost:8080/auth/callback
+https://auth.dev/auth/callback
 ```
 
 The supplied **CMS Demo** client ID is prefilled:
@@ -44,10 +49,10 @@ The installer selects the demonstration seed by default. It creates the `nmbs` a
 
 | Tenant | Email | Password | Role |
 |---|---|---|---|
-| NMBS | `interview@nmbs.auth.local` | `admin123` | Tenant administrator |
-| YPTO | `interview@ypto.auth.local` | `admin123` | Tenant administrator |
-| NMBS | `reviewer@nmbs.auth.local` | `Demo-Nmbs-2026!` | Tenant administrator |
-| YPTO | `reviewer@ypto.auth.local` | `Demo-Ypto-2026!` | Tenant administrator |
+| NMBS | `interview@nmbs.auth.dev` | `admin123` | Tenant administrator |
+| YPTO | `interview@ypto.auth.dev` | `admin123` | Tenant administrator |
+| NMBS | `reviewer@nmbs.auth.dev` | `Demo-Nmbs-2026!` | Tenant administrator |
+| YPTO | `reviewer@ypto.auth.dev` | `Demo-Ypto-2026!` | Tenant administrator |
 
 All four users receive access only to their tenant's Guess application. Passwords are stored as Argon2id hashes; plaintext credentials are never written to PostgreSQL.
 
@@ -56,14 +61,14 @@ These accounts and especially `admin123` are intentionally non-production creden
 For local hosted-login testing, add:
 
 ```text
-127.0.0.1 nmbs.auth.local ypto.auth.local
+127.0.0.1 auth.dev nmbs.auth.dev ypto.auth.dev
 ```
 
 The tenant login origins are then:
 
 ```text
-http://nmbs.auth.local:8080
-http://ypto.auth.local:8080
+https://nmbs.auth.dev
+https://ypto.auth.dev
 ```
 
 An application must first have exact redirect URIs and a generated client secret configured in the management console before `/connect/authorize` can start its login flow.

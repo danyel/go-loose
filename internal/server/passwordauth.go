@@ -70,6 +70,11 @@ func (s *Server) passwordLogin(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	tenantSlug := s.requestTenantSlug(r.Host)
+	if tenantSlug == "" {
+		http.NotFound(w, r)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := r.ParseForm(); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid login request")
@@ -106,6 +111,14 @@ func (s *Server) passwordLogin(w http.ResponseWriter, r *http.Request) {
 	valid := err == nil && password.Verify(encoded, passwordValue)
 	if err != nil {
 		password.Verify(s.loginGuard.dummyHash, passwordValue)
+	}
+	if valid {
+		tenantAllowed, accessErr := s.store.HasTenantAccess(r.Context(), user.ID, tenantSlug)
+		if accessErr != nil {
+			s.internalError(w, "check password user tenant access", accessErr)
+			return
+		}
+		valid = tenantAllowed
 	}
 	if !valid {
 		s.loginGuard.fail(guardKey, now)
