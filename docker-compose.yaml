@@ -31,6 +31,9 @@ services:
       GO_LOOSE_DEV_LOGIN: "false"
       GO_LOOSE_LOCAL_LOGIN: "true"
       GO_LOOSE_ALLOW_PRIVATE_CONTRACT_URLS: "true"
+      SSL_CERT_FILE: /certs/local-ca.crt
+    volumes:
+      - ${LOCAL_CA_FILE:-../infrastructure/certs/local-ca.crt}:/certs/local-ca.crt:ro
     expose:
       - "8080"
     healthcheck:
