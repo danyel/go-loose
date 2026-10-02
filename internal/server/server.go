@@ -114,7 +114,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /connect/logout", s.clientLogout)
 	mux.HandleFunc("GET /client/login", s.clientLoginPage)
 
-	mux.Handle("GET /", s.requireSession(http.HandlerFunc(s.index)))
+	// {$} matches only "/". The unanchored pattern "GET /" is a catch-all, so a
+	// browser favicon request would redirect to /install and rotate its CSRF cookie.
+	mux.Handle("GET /{$}", s.requireSession(http.HandlerFunc(s.index)))
 	mux.Handle("GET /docs", s.requireSession(http.HandlerFunc(s.docs)))
 	mux.Handle("GET /openapi.json", s.requireSession(http.HandlerFunc(s.openapi)))
 	mux.Handle("GET /api/v1/dashboard", s.requireSession(http.HandlerFunc(s.dashboard)))

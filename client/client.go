@@ -47,6 +47,8 @@ type authorizationResponse struct {
 	Principal
 }
 
+const XTenantId = "X-Tenant-Id"
+
 type contextKey struct{}
 
 func New(cfg Config) (*Client, error) {

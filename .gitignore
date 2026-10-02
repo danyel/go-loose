@@ -3,4 +3,5 @@
 .vscode/
 bin/
 coverage.out
+google_secrets.json
 

@@ -14,6 +14,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    networks:
+      - go_loose_network
   go-loose:
     build: .
     depends_on:
@@ -29,13 +31,17 @@ services:
       GO_LOOSE_LOCAL_LOGIN: "true"
       GO_LOOSE_ALLOW_PRIVATE_CONTRACT_URLS: "true"
     ports:
-      - "${GO_LOOSE_PORT:-8080}:8080"
+      - "${GO_LOOSE_PORT:-8081}:8080"
     healthcheck:
       test: ["CMD", "/go-loose", "-healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 10s
+    networks:
+      - go_loose_network
 
 volumes:
   postgres-data2:
+networks:
+  go_loose_network:

@@ -24,7 +24,7 @@ func (s *Server) installPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "installer unavailable", http.StatusInternalServerError)
 		return
 	}
-	csrfToken, err := s.installCSRFToken(w)
+	csrfToken, err := s.installCSRFToken(w, r)
 	if err != nil {
 		http.Error(w, "could not prepare installer", http.StatusInternalServerError)
 		return
@@ -118,16 +118,27 @@ func buildDemoUsers() ([]store.DemoUser, error) {
 	return result, nil
 }
 
-func (s *Server) installCSRFToken(w http.ResponseWriter) (string, error) {
+func (s *Server) installCSRFToken(w http.ResponseWriter, r *http.Request) (string, error) {
+	if cookie, err := r.Cookie("go_loose_install_csrf"); err == nil {
+		payload, valid := s.sessions.VerifySigned(cookie.Value)
+		if valid && strings.HasPrefix(payload, "install|") {
+			s.setInstallCSRFCookie(w, cookie.Value)
+			return cookie.Value, nil
+		}
+	}
 	state, err := s.sessions.NewState()
 	if err != nil {
 		return "", err
 	}
 	token := s.sessions.SignedState("install|" + state)
+	s.setInstallCSRFCookie(w, token)
+	return token, nil
+}
+
+func (s *Server) setInstallCSRFCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "go_loose_install_csrf", Value: token, Path: "/install",
 		HttpOnly: true, Secure: strings.HasPrefix(s.cfg.BaseURL, "https://"),
 		SameSite: http.SameSiteStrictMode, MaxAge: 900,
 	})
-	return token, nil
 }
