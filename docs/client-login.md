@@ -129,6 +129,31 @@ The authorization code expires after two minutes and can be used once. Redirect 
 - The middleware checks Go Loose on every request for immediate revocation. Deploy Go Loose highly available and use a bounded HTTP timeout.
 - API-key authentication and browser-user authentication are independent. Use `client.Middleware` for service/API keys and `BrowserAuth.Middleware` for logged-in users.
 
+## Applications on the local platform
+
+The local platform signs in two client applications, both with the wildcard
+identity domain `auth.dev`:
+
+| Application | Tenant | Callback URL |
+|---|---|---|
+| Go Guess | `nmbs` | `https://nmbs.guess.dev/api/auth/callback` |
+| Go Guess | `ypto` | `https://ypto.guess.dev/api/auth/callback` |
+| Go Tell | `tell` | `https://tell.dev/api/auth/callback` |
+
+Go Guess has one application per tenant because it serves one host per tenant.
+Go Tell has a single application: it is served from one host with no tenant
+routing, so one client covers every request.
+
+Client secrets are shown once when an application is configured. The Compose
+stack reads them from a gitignored `.env`, and the Kubernetes releases receive
+them through their release secret. Go Loose hashes stored secrets, so a lost
+secret can only be replaced, never recovered.
+
+Cluster clients cannot reach the workstation Traefik that serves `auth.dev`.
+Both releases therefore mount the platform CA and expect a reachable identity
+address, and a `502` on `/api/auth/callback` means the pod cannot reach Go
+Loose rather than that the client is misconfigured.
+
 ## Troubleshooting `403`
 
 `403 your account does not have access to this application` means authentication succeeded but the user lacks an application grant. In Go Loose, open **Users**, select the user, choose **Manage**, and enable the target application. A missing or incorrect token header returns `401`, not `403`.
