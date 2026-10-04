@@ -8,8 +8,34 @@ import (
 	"time"
 
 	"github.com/danyel/go-loose/internal/key"
+	"github.com/danyel/go-loose/internal/role"
 	"github.com/danyel/go-loose/internal/store"
 )
+
+// clientUserResponse is the identity payload handed to client applications. It
+// carries the tenant role and its capabilities so that an application such as
+// go-tell can gate features, plus an absolute avatar_url it can render directly.
+type clientUserResponse struct {
+	ID            string   `json:"id"`
+	Email         string   `json:"email"`
+	DisplayName   string   `json:"display_name"`
+	AvatarURL     string   `json:"avatar_url"`
+	TenantID      string   `json:"tenant_id"`
+	TenantSlug    string   `json:"tenant_slug"`
+	ApplicationID string   `json:"application_id"`
+	Application   string   `json:"application"`
+	Role          string   `json:"role"`
+	Permissions   []string `json:"permissions"`
+}
+
+func (s *Server) clientUser(user store.ClientUser) clientUserResponse {
+	return clientUserResponse{
+		ID: user.ID, Email: user.Email, DisplayName: user.DisplayName,
+		AvatarURL: s.avatarURL(user.AvatarKey), TenantID: user.TenantID,
+		TenantSlug: user.TenantSlug, ApplicationID: user.ApplicationID, Application: user.Application,
+		Role: user.Role, Permissions: role.Role(user.Role).Permissions(),
+	}
+}
 
 func (s *Server) clientAuthorize(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
@@ -99,7 +125,7 @@ func (s *Server) clientToken(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token": token, "token_type": "Bearer",
-		"expires_in": int(time.Until(expiresAt).Seconds()), "user": user,
+		"expires_in": int(time.Until(expiresAt).Seconds()), "user": s.clientUser(user),
 	})
 }
 
@@ -118,7 +144,7 @@ func (s *Server) clientUserInfo(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "load client user", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, user)
+	writeJSON(w, http.StatusOK, s.clientUser(user))
 }
 
 func (s *Server) clientLogout(w http.ResponseWriter, r *http.Request) {

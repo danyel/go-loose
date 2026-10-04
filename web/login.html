@@ -4,7 +4,7 @@
 <body class="login-page">
   <div class="login-glow"></div>
   <main class="terminal">
-    <div class="terminal-bar"><span></span><span></span><span></span><strong>goloose@access-plane:~</strong></div>
+    <div class="terminal-bar"><span></span><span></span><span></span><strong>{{LOGIN_PROMPT}}</strong></div>
     <div class="terminal-body">
       <pre class="ascii"> ██████╗  ██████╗     ██╗      ██████╗  ██████╗ ███████╗███████╗
 ██╔════╝ ██╔═══██╗    ██║     ██╔═══██╗██╔═══██╗██╔════╝██╔════╝
@@ -12,9 +12,9 @@
 ██║   ██║██║   ██║    ██║     ██║   ██║██║   ██║╚════██║██╔══╝
 ╚██████╔╝╚██████╔╝    ███████╗╚██████╔╝╚██████╔╝███████║███████╗
  ╚═════╝  ╚═════╝     ╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝</pre>
-      <p class="eyebrow">{{LOGIN_CONTEXT}}</p>
-      <p><span class="prompt">goloose@access-plane:~$</span> initialize secure session</p>
-      <p class="muted">{{LOGIN_MESSAGE}}</p>
+        <p class="eyebrow">{{LOGIN_CONTEXT}}</p>
+        <p><span class="prompt">{{LOGIN_PROMPT}}$</span> initialize secure session</p>
+        <p class="muted">{{LOGIN_MESSAGE}}</p>
       <form class="password-login" style="{{LOCAL_STYLE}}" action="/auth/password" method="post">
         <input type="hidden" name="csrf_token" value="{{CSRF_TOKEN}}">
         <label>Email<input type="email" name="email" autocomplete="username" required></label>
@@ -23,7 +23,7 @@
       </form>
       <div style="{{SSO_STYLE}}">
       <a class="terminal-login" href="/auth/start"><span>›</span> LOGIN WITH SSO</a></div>
-      <p class="cursor-line"><span class="prompt">goloose@access-plane:~$</span> <span class="cursor">█</span></p>
+      <p class="cursor-line"><span class="prompt">{{LOGIN_PROMPT}}$</span> <span class="cursor">█</span></p>
     </div>
   </main>
   <script>const t=localStorage.getItem('gl-theme')||'tokyo',m=localStorage.getItem('gl-mode')||'dark';document.documentElement.dataset.theme=t;document.documentElement.dataset.mode=m</script>

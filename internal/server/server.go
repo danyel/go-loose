@@ -22,6 +22,7 @@ import (
 	"github.com/danyel/go-loose/internal/config"
 	"github.com/danyel/go-loose/internal/contract"
 	"github.com/danyel/go-loose/internal/key"
+	"github.com/danyel/go-loose/internal/role"
 	"github.com/danyel/go-loose/internal/secretbox"
 	"github.com/danyel/go-loose/internal/session"
 	"github.com/danyel/go-loose/internal/store"
@@ -107,6 +108,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /auth/logout", s.authLogout)
 	mux.HandleFunc("POST /auth/password", s.passwordLogin)
 	mux.HandleFunc("GET /assets/{name}", s.asset)
+	mux.HandleFunc("GET /api/v1/avatars/{key}", s.avatar)
 	mux.HandleFunc("POST /api/v1/authorize", s.authorize)
 	mux.HandleFunc("GET /connect/authorize", s.clientAuthorize)
 	mux.HandleFunc("POST /connect/token", s.clientToken)
@@ -117,6 +119,9 @@ func (s *Server) Handler() http.Handler {
 	// {$} matches only "/". The unanchored pattern "GET /" is a catch-all, so a
 	// browser favicon request would redirect to /install and rotate its CSRF cookie.
 	mux.Handle("GET /{$}", s.requireSession(http.HandlerFunc(s.index)))
+	mux.Handle("GET /profile", s.requireSession(http.HandlerFunc(s.profilePage)))
+	mux.Handle("GET /api/v1/profile", s.requireSession(http.HandlerFunc(s.profile)))
+	mux.Handle("PUT /api/v1/profile", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.updateProfile))))
 	mux.Handle("GET /docs", s.requireSession(http.HandlerFunc(s.docs)))
 	mux.Handle("GET /openapi.json", s.requireSession(http.HandlerFunc(s.openapi)))
 	mux.Handle("GET /api/v1/dashboard", s.requireSession(http.HandlerFunc(s.dashboard)))
@@ -155,16 +160,26 @@ func (s *Server) clientLoginPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
-	allowed, err := s.store.HasManagementAccess(r.Context(), claimsFrom(r).UserID)
+	claims := claimsFrom(r)
+	console, err := s.store.HasConsoleAccess(r.Context(), claims.UserID)
 	if err != nil {
-		s.internalError(w, "check management access", err)
+		s.internalError(w, "check console access", err)
 		return
 	}
-	if !allowed {
-		s.serveEmbedded(w, "waiting-room.html")
+	if console {
+		s.serveEmbedded(w, "index.html")
 		return
 	}
-	s.serveEmbedded(w, "index.html")
+	member, err := s.store.HasMembership(r.Context(), claims.UserID)
+	if err != nil {
+		s.internalError(w, "check membership", err)
+		return
+	}
+	if member {
+		http.Redirect(w, r, "/profile", http.StatusSeeOther)
+		return
+	}
+	s.serveEmbedded(w, "waiting-room.html")
 }
 
 func (s *Server) docs(w http.ResponseWriter, _ *http.Request) {
@@ -177,7 +192,7 @@ func (s *Server) openapi(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	name := path.Base(r.PathValue("name"))
-	if name != "style.css" && name != "app.js" {
+	if name != "style.css" && name != "app.js" && name != "profile.js" {
 		http.NotFound(w, r)
 		return
 	}
@@ -330,13 +345,13 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	claims := claimsFrom(r)
-	allowed, err := s.store.HasManagementAccess(r.Context(), claims.UserID)
+	allowed, err := s.store.HasConsoleAccess(r.Context(), claims.UserID)
 	if err != nil {
-		s.internalError(w, "check management access", err)
+		s.internalError(w, "check console access", err)
 		return
 	}
 	if !allowed {
-		writeError(w, http.StatusForbidden, "waiting for administrator approval")
+		writeError(w, http.StatusForbidden, "this account has no console access")
 		return
 	}
 	tenants, err := s.store.ListTenants(r.Context(), claims.UserID)
@@ -374,9 +389,19 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "check system administrator", err)
 		return
 	}
+	profile, err := s.store.Profile(r.Context(), claims.UserID)
+	if err != nil {
+		s.internalError(w, "load profile", err)
+		return
+	}
+	for index := range users {
+		users[index].AvatarURL = s.avatarURL(users[index].AvatarKey)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user": claims, "tenants": tenants, "applications": applications, "keys": keys, "contracts": contracts,
-		"users": users, "pending_users": pendingUsers, "is_system_administrator": isSystemAdministrator,
+		"user": claims, "profile": s.profileResponse(profile),
+		"tenants": tenants, "applications": applications, "keys": keys, "contracts": contracts,
+		"users": users, "pending_users": pendingUsers, "roles": role.Catalog(),
+		"is_system_administrator": isSystemAdministrator,
 	})
 }
 
@@ -703,7 +728,11 @@ func validSlug(value string) bool {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 6<<20)
+	return decodeJSONLimit(w, r, 6<<20, target)
+}
+
+func decodeJSONLimit(w http.ResponseWriter, r *http.Request, limit int64, target any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {

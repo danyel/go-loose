@@ -60,9 +60,14 @@ Production must place Go Loose behind TLS, use a secret manager, set `GO_LOOSE_B
 - [First-run installation, waiting room, and demo accounts](docs/installation.md)
 - [Go middleware integration](docs/integration.md)
 - [Client application login](docs/client-login.md)
+- [Tenant roles, capabilities, and profile pictures](docs/roles.md)
 - [Database user authentication and local credentials](docs/password-authentication.md)
 - [Operations, migrations, and OIDC](docs/operations.md)
 - [Coding standards](docs/coding-standards.md)
+
+## Profile
+
+Every management session can open `/profile` to set a display name and a profile picture. Pictures are stored in PostgreSQL and served from a public, unguessable URL that client applications can embed directly. Display names stop being overwritten by the identity provider once the user customizes them. See [roles and capabilities](docs/roles.md).
 
 ## Development
 
@@ -77,3 +82,6 @@ make build
 Development requires Go 1.27.1 or newer.
 
 Migrations run transactionally at startup and are tracked in `schema_migrations`. See the operations guide before creating one.
+
+`make integration-test` runs the store integration tests against `GO_LOOSE_TEST_DATABASE_URL`. Those tests drop every table in the target database, so point them at a scratch database.
+

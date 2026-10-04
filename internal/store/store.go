@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/danyel/go-loose/internal/contract"
+	"github.com/danyel/go-loose/internal/role"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -29,6 +30,9 @@ type Tenant struct {
 	Slug string `json:"slug"`
 	Name string `json:"name"`
 	Role string `json:"role"`
+	// Permissions is derived from Role so that the console and API clients read
+	// capabilities instead of re-implementing the role matrix.
+	Permissions []string `json:"permissions"`
 }
 
 type Application struct {
@@ -86,8 +90,15 @@ func (s *Store) UpsertUser(ctx context.Context, subject, email, displayName stri
 		return User{}, err
 	}
 	defer tx.Rollback()
+	// The identity provider owns the display name until the user customizes it
+	// in their profile. The row must still match on every login, otherwise the
+	// insert below would collide with the unique email index.
 	err = tx.QueryRowContext(ctx, `
-		UPDATE users SET subject = $1, email = lower($2), display_name = $3, last_login_at = now()
+		UPDATE users
+		SET subject = $1,
+		    email = lower($2),
+		    display_name = CASE WHEN name_customized THEN display_name ELSE $3 END,
+		    last_login_at = now()
 		WHERE lower(email) = lower($2)
 		RETURNING id, email, display_name`, subject, email, displayName).
 		Scan(&user.ID, &user.Email, &user.DisplayName)
@@ -120,10 +131,10 @@ func (s *Store) Bootstrap(ctx context.Context, userID, tenantSlug, appSlug strin
 	}
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO memberships(tenant_id, user_id, role)
-		SELECT $1, $2, 'owner'
+		SELECT $1, $2, $3
 		WHERE NOT EXISTS (SELECT 1 FROM memberships WHERE tenant_id = $1)
 		   OR EXISTS (SELECT 1 FROM memberships WHERE tenant_id = $1 AND user_id = $2)
-		ON CONFLICT DO NOTHING`, tenantID, userID); err != nil {
+		ON CONFLICT DO NOTHING`, tenantID, userID, role.Owner); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `
@@ -161,6 +172,7 @@ func (s *Store) ListTenants(ctx context.Context, userID string) ([]Tenant, error
 		if err := rows.Scan(&item.ID, &item.Slug, &item.Name, &item.Role); err != nil {
 			return nil, err
 		}
+		item.Permissions = role.Role(item.Role).Permissions()
 		result = append(result, item)
 	}
 	return result, rows.Err()
@@ -181,7 +193,8 @@ func (s *Store) CreateTenant(ctx context.Context, userID, slug, name string) (Te
 	if _, err := tx.ExecContext(ctx, `INSERT INTO memberships(tenant_id, user_id, role) VALUES ($1, $2, 'owner')`, tenant.ID, userID); err != nil {
 		return Tenant{}, err
 	}
-	tenant.Role = "owner"
+	tenant.Role = string(role.Owner)
+	tenant.Permissions = role.Owner.Permissions()
 	if err := tx.Commit(); err != nil {
 		return Tenant{}, err
 	}
@@ -225,11 +238,13 @@ func (s *Store) CreateApplication(ctx context.Context, userID string, app Applic
 		INSERT INTO applications(tenant_id, slug, name, description, allowed_hosts)
 		SELECT $1, $2, $3, $4, $5
 		WHERE EXISTS (
-			SELECT 1 FROM memberships WHERE tenant_id = $1 AND user_id = $6 AND role IN ('owner', 'admin')
+			SELECT 1 FROM memberships
+			WHERE tenant_id = $1 AND user_id = $6 AND role = ANY($7)
 		)
 		RETURNING id, tenant_id, slug, name, description, to_json(allowed_hosts),
 		          client_id, to_json(redirect_uris), false`,
-		app.TenantID, app.Slug, app.Name, app.Description, app.AllowedHosts, userID)
+		app.TenantID, app.Slug, app.Name, app.Description, app.AllowedHosts, userID,
+		role.Grants(role.ManageApplications))
 	var allowedHosts, redirectURIs []byte
 	err := row.Scan(&app.ID, &app.TenantID, &app.Slug, &app.Name, &app.Description, &allowedHosts, &app.ClientID, &redirectURIs, &app.ClientReady)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -273,9 +288,9 @@ func (s *Store) CreateAPIKey(ctx context.Context, userID, applicationID, name, p
 		SELECT a.tenant_id, a.id, $2, $3, $4, $5, $6
 		FROM applications a
 		JOIN memberships m ON m.tenant_id = a.tenant_id
-		WHERE a.id = $1 AND m.user_id = $6 AND m.role IN ('owner', 'admin')
+		WHERE a.id = $1 AND m.user_id = $6 AND m.role = ANY($7)
 		RETURNING id, application_id, name, prefix, status, expires_at, last_used_at, created_at`,
-		applicationID, name, prefix, hash, expiresAt, userID).
+		applicationID, name, prefix, hash, expiresAt, userID, role.Grants(role.ManageKeys)).
 		Scan(&item.ID, &item.ApplicationID, &item.Name, &item.Prefix, &item.Status, &item.ExpiresAt, &item.LastUsedAt, &item.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return APIKey{}, ErrNotFound
@@ -287,8 +302,8 @@ func (s *Store) RevokeAPIKey(ctx context.Context, userID, keyID string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE api_keys k SET status = 'revoked', revoked_at = now()
 		FROM memberships m
-		WHERE k.id = $1 AND m.tenant_id = k.tenant_id AND m.user_id = $2 AND m.role IN ('owner', 'admin')`,
-		keyID, userID)
+		WHERE k.id = $1 AND m.tenant_id = k.tenant_id AND m.user_id = $2 AND m.role = ANY($3)`,
+		keyID, userID, role.Grants(role.ManageKeys))
 	if err != nil {
 		return err
 	}
@@ -349,9 +364,10 @@ func (s *Store) SaveContract(ctx context.Context, userID, applicationID string, 
 		SELECT a.id, $2, $3, $4, $5
 		FROM applications a
 		JOIN memberships m ON m.tenant_id = a.tenant_id
-		WHERE a.id = $1 AND m.user_id = $5 AND m.role IN ('owner', 'admin')
+		WHERE a.id = $1 AND m.user_id = $5 AND m.role = ANY($6)
 		RETURNING id, application_id, version, source_url, created_at`,
-		applicationID, document.Version, sourceURL, document.JSON, userID).
+		applicationID, document.Version, sourceURL, document.JSON, userID,
+		role.Grants(role.ManageContracts)).
 		Scan(&result.ID, &result.ApplicationID, &result.Version, &result.SourceURL, &result.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Contract{}, ErrNotFound

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/danyel/go-loose/internal/role"
 )
 
 type ManagedUser struct {
@@ -14,8 +16,13 @@ type ManagedUser struct {
 	Email          string   `json:"email"`
 	DisplayName    string   `json:"display_name"`
 	Role           string   `json:"role"`
+	Permissions    []string `json:"permissions"`
 	Status         string   `json:"status"`
 	ApplicationIDs []string `json:"application_ids"`
+	// AvatarKey is the stored locator. The server turns it into the absolute
+	// AvatarURL returned to clients.
+	AvatarKey *string `json:"-"`
+	AvatarURL string  `json:"avatar_url"`
 }
 
 type ClientApplication struct {
@@ -36,12 +43,21 @@ type ClientUser struct {
 	TenantSlug    string `json:"tenant_slug"`
 	ApplicationID string `json:"application_id"`
 	Application   string `json:"application"`
+	// Role is the membership role in the tenant owning the application. A user
+	// without a membership is reported as User so clients always see the least
+	// privileged role.
+	Role        string   `json:"role"`
+	Permissions []string `json:"permissions"`
+	// AvatarKey is the stored locator; the server expands it into AvatarURL.
+	AvatarKey *string `json:"-"`
+	AvatarURL string  `json:"avatar_url"`
 }
 
 func (s *Store) ListManagedUsers(ctx context.Context, administratorID string) ([]ManagedUser, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.id, m.tenant_id, u.email, u.display_name, m.role,
 		       CASE WHEN u.subject LIKE 'invited:%' THEN 'invited' ELSE 'active' END,
+		       u.avatar_key,
 		       COALESCE((
 		           SELECT json_agg(ua.application_id ORDER BY ua.application_id)
 		           FROM user_application_access ua
@@ -53,9 +69,9 @@ func (s *Store) ListManagedUsers(ctx context.Context, administratorID string) ([
 		WHERE EXISTS (
 			SELECT 1 FROM memberships own
 			WHERE own.tenant_id = m.tenant_id AND own.user_id = $1
-			  AND own.role IN ('owner', 'admin')
+			  AND own.role = ANY($2)
 		)
-		ORDER BY u.email, m.tenant_id`, administratorID)
+		ORDER BY u.email, m.tenant_id`, administratorID, role.Grants(role.ManageUsers))
 	if err != nil {
 		return nil, err
 	}
@@ -64,18 +80,20 @@ func (s *Store) ListManagedUsers(ctx context.Context, administratorID string) ([
 	for rows.Next() {
 		var user ManagedUser
 		var applicationIDs []byte
-		if err := rows.Scan(&user.ID, &user.TenantID, &user.Email, &user.DisplayName, &user.Role, &user.Status, &applicationIDs); err != nil {
+		if err := rows.Scan(&user.ID, &user.TenantID, &user.Email, &user.DisplayName, &user.Role,
+			&user.Status, &user.AvatarKey, &applicationIDs); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(applicationIDs, &user.ApplicationIDs); err != nil {
 			return nil, err
 		}
+		user.Permissions = role.Role(user.Role).Permissions()
 		result = append(result, user)
 	}
 	return result, rows.Err()
 }
 
-func (s *Store) InviteUser(ctx context.Context, administratorID, tenantID, email, displayName, role, passwordHash string) (ManagedUser, error) {
+func (s *Store) InviteUser(ctx context.Context, administratorID, tenantID, email, displayName, membershipRole, passwordHash string) (ManagedUser, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ManagedUser{}, err
@@ -85,8 +103,8 @@ func (s *Store) InviteUser(ctx context.Context, administratorID, tenantID, email
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM memberships
-			WHERE tenant_id = $1 AND user_id = $2 AND role IN ('owner', 'admin')
-		)`, tenantID, administratorID).Scan(&permitted); err != nil {
+			WHERE tenant_id = $1 AND user_id = $2 AND role = ANY($3)
+		)`, tenantID, administratorID, role.Grants(role.ManageUsers)).Scan(&permitted); err != nil {
 		return ManagedUser{}, err
 	}
 	if !permitted {
@@ -109,17 +127,18 @@ func (s *Store) InviteUser(ctx context.Context, administratorID, tenantID, email
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO memberships(tenant_id, user_id, role) VALUES ($1, $2, $3)
 		ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
-		tenantID, user.ID, role); err != nil {
+		tenantID, user.ID, membershipRole); err != nil {
 		return ManagedUser{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return ManagedUser{}, err
 	}
-	user.TenantID, user.Role, user.ApplicationIDs = tenantID, role, []string{}
+	user.TenantID, user.Role, user.ApplicationIDs = tenantID, membershipRole, []string{}
+	user.Permissions = role.Role(membershipRole).Permissions()
 	return user, nil
 }
 
-func (s *Store) SetUserAccess(ctx context.Context, administratorID, tenantID, userID, role string, applicationIDs []string) error {
+func (s *Store) SetUserAccess(ctx context.Context, administratorID, tenantID, userID, membershipRole string, applicationIDs []string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -130,8 +149,8 @@ func (s *Store) SetUserAccess(ctx context.Context, administratorID, tenantID, us
 		FROM memberships administrator
 		WHERE target.tenant_id = $1 AND target.user_id = $2
 		  AND administrator.tenant_id = target.tenant_id
-		  AND administrator.user_id = $3 AND administrator.role IN ('owner', 'admin')`,
-		tenantID, userID, administratorID, role)
+		  AND administrator.user_id = $3 AND administrator.role = ANY($5)`,
+		tenantID, userID, administratorID, membershipRole, role.Grants(role.ManageUsers))
 	if err != nil {
 		return err
 	}
@@ -165,12 +184,12 @@ func (s *Store) ConfigureClient(ctx context.Context, administratorID, applicatio
 	var encoded []byte
 	err := s.db.QueryRowContext(ctx, `
 		UPDATE applications a
-		SET redirect_uris = $3, client_secret_hash = $4, updated_at = now()
+		SET redirect_uris = $4, client_secret_hash = $5, updated_at = now()
 		FROM memberships m
 		WHERE a.id = $1 AND m.tenant_id = a.tenant_id AND m.user_id = $2
-		  AND m.role IN ('owner', 'admin')
+		  AND m.role = ANY($3)
 		RETURNING a.id, a.client_id, to_json(a.redirect_uris), true`,
-		applicationID, administratorID, redirectURIs, secretHash).
+		applicationID, administratorID, role.Grants(role.ManageApplications), redirectURIs, secretHash).
 		Scan(&app.ID, &app.ClientID, &encoded, &app.ClientReady)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Application{}, ErrNotFound
@@ -246,14 +265,20 @@ func (s *Store) ExchangeAuthorizationCode(ctx context.Context, clientID, redirec
 	var user ClientUser
 	err = tx.QueryRowContext(ctx, `
 		UPDATE client_authorization_codes c SET used_at = now()
-		FROM applications a, tenants t, users u
+		FROM applications a
+		JOIN tenants t ON t.id = a.tenant_id
+		JOIN user_application_access ua ON ua.application_id = a.id
+		JOIN users u ON u.id = ua.user_id
+		LEFT JOIN memberships m ON m.tenant_id = t.id AND m.user_id = u.id
 		WHERE c.code_hash = $1 AND c.used_at IS NULL AND c.expires_at > now()
 		  AND c.redirect_uri = $2 AND a.id = c.application_id
+		  AND ua.user_id = c.user_id AND ua.application_id = a.id
 		  AND a.client_id = $3 AND a.client_secret_hash = $4
-		  AND t.id = a.tenant_id AND u.id = c.user_id
-		RETURNING u.id, u.email, u.display_name, t.id, t.slug, a.id, a.slug`,
-		codeHash, redirectURI, clientID, secretHash).
-		Scan(&user.ID, &user.Email, &user.DisplayName, &user.TenantID, &user.TenantSlug, &user.ApplicationID, &user.Application)
+		RETURNING u.id, u.email, u.display_name, t.id, t.slug, a.id, a.slug,
+		          COALESCE(m.role, $5), u.avatar_key`,
+		codeHash, redirectURI, clientID, secretHash, role.User).
+		Scan(&user.ID, &user.Email, &user.DisplayName, &user.TenantID, &user.TenantSlug,
+			&user.ApplicationID, &user.Application, &user.Role, &user.AvatarKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ClientUser{}, time.Time{}, ErrNotFound
 	}
@@ -273,12 +298,18 @@ func (s *Store) ClientUserByToken(ctx context.Context, tokenHash []byte) (Client
 	var user ClientUser
 	err := s.db.QueryRowContext(ctx, `
 		UPDATE client_user_sessions s SET last_used_at = now()
-		FROM applications a, tenants t, users u, user_application_access ua
+		FROM applications a
+		JOIN tenants t ON t.id = a.tenant_id
+		JOIN user_application_access ua ON ua.application_id = a.id
+		JOIN users u ON u.id = ua.user_id
+		LEFT JOIN memberships m ON m.tenant_id = t.id AND m.user_id = u.id
 		WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
-		  AND a.id = s.application_id AND t.id = a.tenant_id AND u.id = s.user_id
-		  AND ua.application_id = a.id AND ua.user_id = u.id
-		RETURNING u.id, u.email, u.display_name, t.id, t.slug, a.id, a.slug`,
-		tokenHash).Scan(&user.ID, &user.Email, &user.DisplayName, &user.TenantID, &user.TenantSlug, &user.ApplicationID, &user.Application)
+		  AND a.id = s.application_id AND ua.user_id = s.user_id
+		RETURNING u.id, u.email, u.display_name, t.id, t.slug, a.id, a.slug,
+		          COALESCE(m.role, $2), u.avatar_key`,
+		tokenHash, role.User).
+		Scan(&user.ID, &user.Email, &user.DisplayName, &user.TenantID, &user.TenantSlug,
+			&user.ApplicationID, &user.Application, &user.Role, &user.AvatarKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ClientUser{}, ErrNotFound
 	}

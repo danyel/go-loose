@@ -138,12 +138,14 @@ func (s *Server) renderManagementLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantSlug := s.requestTenantSlug(r.Host)
 	tenantLogin := tenantSlug != ""
+	loginPrompt := "admin@goloose:~"
 	loginContext := "SYSTEM ADMINISTRATION"
 	loginMessage := "Sign in through the configured identity provider. System administration is not tied to a tenant."
 	passwordButton := "LOGIN"
 	if tenantLogin {
 		loginContext = strings.ToUpper(tenantSlug) + " · TENANT ADMINISTRATION"
 		loginMessage = "Sign in with your tenant database account."
+		loginPrompt = tenantSlug + "@goloose:~"
 		passwordButton = "LOGIN TO " + strings.ToUpper(tenantSlug)
 	}
 	page := strings.NewReplacer(
@@ -153,6 +155,7 @@ func (s *Server) renderManagementLogin(w http.ResponseWriter, r *http.Request) {
 		"{{PASSWORD_BUTTON}}", html.EscapeString(passwordButton),
 		"{{LOCAL_STYLE}}", hiddenStyle(!tenantLogin || !s.cfg.LocalLogin),
 		"{{SSO_STYLE}}", hiddenStyle(tenantLogin || !s.hasOIDC()),
+		"{{LOGIN_PROMPT}}", loginPrompt,
 	).Replace(string(content))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(page))

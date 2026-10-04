@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en" data-theme="tokyo" data-mode="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Go Loose · Profile</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body class="profile-page">
+  <div class="noise"></div>
+  <header>
+    <a class="brand" href="/"><span class="brand-mark">GL</span><span>Go Loose</span></a>
+    <nav>
+      <a href="/">Console</a>
+      <a href="/docs">API docs</a>
+      <label class="compact">Theme
+        <select id="theme"><option value="tokyo">Tokyo Night</option><option value="catppuccin">Catppuccin</option><option value="tomorrow">Tomorrow</option><option value="kanagawa">Kanagawa</option></select>
+      </label>
+      <button id="mode" class="icon-button" title="Toggle light/dark mode">◐</button>
+      <form action="/auth/logout" method="post"><button class="ghost" type="submit">Log out</button></form>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero profile-hero">
+      <div>
+        <p class="eyebrow">YOUR ACCOUNT</p>
+        <h1>Profile<span>.</span></h1>
+        <p class="lede">Your name, picture, and the tenant roles you hold. Applications such as go-tell read the picture link and your role through the login endpoints.</p>
+      </div>
+    </section>
+
+    <div id="notice" class="notice" hidden></div>
+
+    <section class="profile-grid">
+      <article class="card profile-card">
+        <h2>Profile picture</h2>
+        <div class="avatar-preview">
+          <img id="avatar-image" alt="" width="112" height="112" hidden>
+          <span id="avatar-fallback" class="avatar-initials">–</span>
+        </div>
+        <form id="avatar-form">
+          <label>Choose a picture <small>(JPEG, PNG, or GIF, up to 2 MiB)</small><input type="file" id="avatar-file" accept="image/jpeg,image/png,image/gif"></label>
+          <div class="profile-actions">
+            <button type="submit" id="avatar-save" disabled>Upload picture</button>
+            <button type="button" class="ghost" id="avatar-remove" hidden>Remove picture</button>
+          </div>
+        </form>
+        <label class="muted">Picture link <small>(embed it with a plain image tag)</small>
+          <div class="secret"><code id="avatar-url">No picture uploaded</code><button id="copy-avatar" type="button" hidden>Copy</button></div>
+        </label>
+      </article>
+
+      <article class="card profile-card">
+        <h2>Account</h2>
+        <form id="profile-form">
+          <label>Display name<input name="display_name" id="display-name" maxlength="200" required></label>
+          <label>Email<input id="email" readonly></label>
+          <dl class="facts">
+            <div><dt>System administrator</dt><dd id="system-admin">—</dd></div>
+            <div><dt>Member since</dt><dd id="created-at">—</dd></div>
+            <div><dt>Last login</dt><dd id="last-login">—</dd></div>
+            <div><dt>Name managed by</dt><dd id="name-source">—</dd></div>
+          </dl>
+          <button type="submit">Save profile</button>
+        </form>
+      </article>
+
+      <article class="card profile-card profile-wide">
+        <h2>Tenant roles</h2>
+        <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Slug</th><th>Role</th><th>Capabilities</th></tr></thead><tbody id="membership-list"></tbody></table></div>
+      </article>
+    </section>
+  </main>
+
+  <script src="/assets/profile.js" defer></script>
+</body>
+</html>

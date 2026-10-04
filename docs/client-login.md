@@ -120,6 +120,26 @@ Request → client middleware → GET /connect/userinfo → protected handler
 
 The authorization code expires after two minutes and can be used once. Redirect URIs must match exactly. Removing a user's application grant immediately makes `/connect/userinfo` reject existing sessions. Logout revokes the central session and clears the local cookie.
 
+## Role and profile picture
+
+Both `/connect/token` and `/connect/userinfo` return the caller's `role`, `permissions`, and absolute `avatar_url`, resolved against the tenant that owns the application:
+
+```json
+{
+  "sub": "9f0f...",
+  "email": "ada@example.com",
+  "display_name": "Ada Lovelace",
+  "avatar_url": "https://loose.example.com/api/v1/avatars/kZ3...",
+  "role": "developer",
+  "permissions": ["console.read", "profile.edit", "applications.manage", "keys.manage", "contracts.manage"],
+  "can": {"contracts.manage": true, "users.manage": false}
+}
+```
+
+`avatar_url` is public by design, so it can be embedded directly with a plain image tag. It is an empty string when the user has not uploaded a picture. Read `can` rather than checking `role` by name; the client package builds it from the same matrix the console uses. See [roles and capabilities](roles.md).
+
+A user with no membership in the application's tenant still authenticates, but the role falls back to `user` with only `profile.edit`.
+
 ## Security and availability
 
 - Use TLS for both Go Loose and the client application.

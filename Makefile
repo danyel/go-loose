@@ -12,13 +12,19 @@ GO_LOOSE_ALLOW_PRIVATE_CONTRACT_URLS ?= true
 
 export
 
-.PHONY: build test run compose-up compose-down fmt vet
+.PHONY: build test integration-test run compose-up compose-down fmt vet
 
 build:
 	go build ./...
 
 test:
 	go test -race ./...
+
+# Integration tests truncate every table in the target database, so point them at
+# a scratch database rather than one holding real data.
+integration-test:
+	@test -n "$(GO_LOOSE_TEST_DATABASE_URL)" || { echo "set GO_LOOSE_TEST_DATABASE_URL to a scratch database"; exit 1; }
+	go test -race ./internal/store/ -count=1
 
 run:
 	go run ./cmd/go-loose

@@ -41,10 +41,28 @@ type User struct {
 	ID            string `json:"id"`
 	Email         string `json:"email"`
 	DisplayName   string `json:"display_name"`
+	AvatarURL     string `json:"avatar_url"`
 	TenantID      string `json:"tenant_id"`
 	TenantSlug    string `json:"tenant_slug"`
 	ApplicationID string `json:"application_id"`
 	Application   string `json:"application"`
+	// Role is the user's membership role in the owning tenant, for example
+	// user, operator, developer, admin, or owner.
+	Role string `json:"role"`
+	// Permissions lists the capability names granted by Role, such as
+	// "console.read", "keys.manage", or "profile.edit". Gate application
+	// features on these instead of comparing role names.
+	Permissions []string `json:"permissions"`
+}
+
+// Can reports whether the role behind this session grants a capability.
+func (u User) Can(permission string) bool {
+	for _, granted := range u.Permissions {
+		if granted == permission {
+			return true
+		}
+	}
+	return false
 }
 
 type userContextKey struct{}

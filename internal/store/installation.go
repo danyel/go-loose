@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+
+	"github.com/danyel/go-loose/internal/role"
 )
 
 type Installation struct {
@@ -78,8 +80,9 @@ func (s *Store) Install(ctx context.Context, installation Installation, demoUser
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO memberships(tenant_id, user_id, role) VALUES ($1, $2, 'admin')
-			ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = 'admin'`, tenantID, userID); err != nil {
+			INSERT INTO memberships(tenant_id, user_id, role) VALUES ($1, $2, $3)
+			ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+			tenantID, userID, role.Admin); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -113,7 +116,7 @@ func (s *Store) ClaimFirstSystemAdministrator(ctx context.Context, userID string
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO memberships(tenant_id, user_id, role)
-		SELECT id, $1, 'owner' FROM tenants ON CONFLICT DO NOTHING`, userID); err != nil {
+		SELECT id, $1, $2 FROM tenants ON CONFLICT DO NOTHING`, userID, role.Owner); err != nil {
 		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -124,11 +127,24 @@ func (s *Store) ClaimFirstSystemAdministrator(ctx context.Context, userID string
 	return true, tx.Commit()
 }
 
-func (s *Store) HasManagementAccess(ctx context.Context, userID string) (bool, error) {
+// HasConsoleAccess reports whether the user may read the management console.
+// System administrators always qualify; otherwise the membership role must
+// grant console.read, which excludes self-service User members.
+func (s *Store) HasConsoleAccess(ctx context.Context, userID string) (bool, error) {
 	var allowed bool
 	err := s.db.QueryRowContext(ctx, `
 		SELECT EXISTS(SELECT 1 FROM system_administrators WHERE user_id = $1)
-		    OR EXISTS(SELECT 1 FROM memberships WHERE user_id = $1)`, userID).Scan(&allowed)
+		    OR EXISTS(SELECT 1 FROM memberships WHERE user_id = $1 AND role = ANY($2))`,
+		userID, role.Grants(role.ReadConsole)).Scan(&allowed)
+	return allowed, err
+}
+
+// HasMembership reports whether the user belongs to any tenant. A member without
+// console access is a self-service user rather than a waiting-room visitor.
+func (s *Store) HasMembership(ctx context.Context, userID string) (bool, error) {
+	var allowed bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM memberships WHERE user_id = $1)`, userID).
+		Scan(&allowed)
 	return allowed, err
 }
 

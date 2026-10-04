@@ -38,6 +38,50 @@
           "api_key_id": {"type": "string", "format": "uuid"},
           "api_key_name": {"type": "string"}
         }
+      },
+      "Membership": {
+        "type": "object",
+        "description": "A tenant role held by a user, with the capabilities it grants.",
+        "properties": {
+          "tenant_id": {"type": "string", "format": "uuid"},
+          "tenant_slug": {"type": "string"},
+          "tenant_name": {"type": "string"},
+          "role": {"type": "string", "enum": ["owner", "admin", "developer", "operator", "viewer", "user"]},
+          "permissions": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "Profile": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "email": {"type": "string", "format": "email"},
+          "display_name": {"type": "string"},
+          "avatar_url": {"type": "string", "description": "Absolute picture URL, or an empty string when no picture is set."},
+          "memberships": {"type": "array", "items": {"$ref": "#/components/schemas/Membership"}},
+          "is_system_administrator": {"type": "boolean"},
+          "name_customized": {"type": "boolean", "description": "True once the user set the display name themselves, which stops the identity provider from overwriting it."},
+          "created_at": {"type": "string", "format": "date-time"},
+          "last_login_at": {"type": "string", "format": "date-time"},
+          "profile_updated_at": {"type": "string", "format": "date-time"},
+          "avatar_updated_at": {"type": "string", "format": "date-time"}
+        }
+      },
+      "ProfileUpdate": {
+        "type": "object",
+        "description": "Send display_name, avatar, or remove_avatar. avatar accepts raw base64 or a data URL.",
+        "properties": {
+          "display_name": {"type": "string", "minLength": 1, "maxLength": 200},
+          "avatar": {"type": "string", "description": "Base64 or data URL of a JPEG, PNG, or GIF up to 2 MiB and 4096 by 4096 pixels."},
+          "remove_avatar": {"type": "boolean"}
+        }
+      },
+      "RoleCatalogEntry": {
+        "type": "object",
+        "properties": {
+          "value": {"type": "string"},
+          "label": {"type": "string"},
+          "permissions": {"type": "array", "items": {"type": "string"}}
+        }
       }
     }
   },
@@ -93,8 +137,52 @@
           "Dashboard Management"
         ],
         "summary": "Get management console data",
+        "description": "Requires a role that grants console.read. Each tenant and user entry carries the capability names its role grants.",
         "security": [{"session": []}],
         "responses": {"200": {"description": "Dashboard data"}}
+      }
+    },
+    "/profile": {
+      "get": {
+        "tags": ["Profile"],
+        "summary": "Open the self-service profile screen",
+        "description": "Available to every authenticated management session, including self-service User members.",
+        "security": [{"session": []}],
+        "responses": {"200": {"description": "Profile screen"}, "303": {"description": "Redirect to login"}}
+      }
+    },
+    "/api/v1/profile": {
+      "get": {
+        "tags": ["Profile"],
+        "summary": "Read the caller's own profile and tenant roles",
+        "security": [{"session": []}],
+        "responses": {
+          "200": {"description": "Profile", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Profile"}}}},
+          "401": {"description": "Authentication required"}
+        }
+      },
+      "put": {
+        "tags": ["Profile"],
+        "summary": "Update the caller's display name or profile picture",
+        "security": [{"session": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProfileUpdate"}}}},
+        "responses": {
+          "200": {"description": "Updated profile", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Profile"}}}},
+          "400": {"description": "Invalid display name or unsupported picture"}
+        }
+      }
+    },
+    "/api/v1/avatars/{key}": {
+      "get": {
+        "tags": ["Profile"],
+        "summary": "Fetch a profile picture",
+        "description": "Public on purpose so other applications can embed the picture with a plain image tag. The key is 256 bits of randomness and exposes nothing about the user.",
+        "parameters": [{"in": "path", "name": "key", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Image bytes", "content": {"image/jpeg": {"schema": {"type": "string", "format": "binary"}}, "image/png": {"schema": {"type": "string", "format": "binary"}}, "image/gif": {"schema": {"type": "string", "format": "binary"}}}},
+          "304": {"description": "Not modified"},
+          "404": {"description": "No picture for that key"}
+        }
       }
     },
     "/api/v1/tenants": {
@@ -169,6 +257,7 @@
           "User Action"
         ],
         "summary": "Exchange a one-time authorization code",
+        "description": "The nested user object carries role, permissions, and avatar_url for the tenant owning the application.",
         "security": [{"clientBasic": []}],
         "requestBody": {"required": true, "content": {"application/x-www-form-urlencoded": {"schema": {"type": "object"}}}},
         "responses": {"200": {"description": "Opaque client user session"}, "401": {"description": "Invalid code or client credentials"}}
@@ -179,7 +268,8 @@
         "tags": [
           "User Action"
         ],
-        "summary": "Validate a client user session",
+        "summary": "Validate a client user session and read the caller's role and picture",
+        "description": "Returns id, email, display_name, avatar_url, tenant and application identity, role, and permissions.",
         "security": [{"userBearer": []}],
         "responses": {"200": {"description": "Authenticated client user"}, "401": {"description": "Invalid, revoked, or expired session"}}
       }
@@ -210,7 +300,7 @@
         "tags": [
           "User Management"
         ],
-        "summary": "Invite a tenant user",
+        "summary": "Invite a tenant user with an admin, developer, operator, viewer, or user role",
         "security": [{"session": []}],
         "responses": {"201": {"description": "User invited"}}
       }
@@ -221,9 +311,18 @@
           "User Management"
         ],
         "summary": "Set tenant role and application access",
+        "description": "Any known role is accepted, including owner.",
         "security": [{"session": []}],
         "parameters": [{"in": "path", "name": "id", "required": true, "schema": {"type": "string", "format": "uuid"}}],
         "responses": {"204": {"description": "Access updated"}}
+      }
+    },
+    "/api/v1/roles": {
+      "get": {
+        "tags": ["User Management"],
+        "summary": "List tenant roles with their capabilities",
+        "security": [{"session": []}],
+        "responses": {"200": {"description": "Role catalog", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/RoleCatalogEntry"}}}}}}
       }
     },
     "/api/v1/users/{id}/approve": {

@@ -1,5 +1,15 @@
-const state = {tenants: [], applications: [], keys: [], contracts: [], users: [], pending_users: [], selectedTenant: ''};
+const state = {
+    tenants: [], applications: [], keys: [], contracts: [], users: [], pending_users: [],
+    roles: [], profile: null, selectedTenant: ''
+};
+// Capability names mirror internal/role. The server sends the grants for the
+// selected tenant so the console never re-implements the matrix.
+const grants = (tenant, permission) => Boolean(tenant?.permissions?.includes(permission));
 const $ = selector => document.querySelector(selector);
+
+const roleOptions = roles => roles
+    .map(item => `<option value="${escapeHTML(item.value)}">${escapeHTML(item.label)}</option>`)
+    .join('');
 const $$ = selector => [...document.querySelectorAll(selector)];
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({
     '&': '&amp;',
@@ -38,14 +48,38 @@ async function load() {
     const data = await api('/api/v1/dashboard');
     Object.assign(state, data);
     if (!state.tenants.some(tenant => tenant.id === state.selectedTenant)) state.selectedTenant = state.tenants[0]?.id || '';
-    $('#identity').textContent = data.user.display_name || data.user.email;
+    renderIdentity();
+    renderRoleOptions();
     render();
+}
+
+function renderIdentity() {
+    const profile = state.profile || {};
+    $('#identity-name').textContent = profile.display_name || profile.email || '';
+    const image = $('#identity-avatar');
+    if (profile.avatar_url) {
+        image.src = profile.avatar_url;
+        image.hidden = false
+    } else {
+        image.hidden = true;
+        image.removeAttribute('src')
+    }
+}
+
+function renderRoleOptions() {
+    // Inviting an owner is rejected by the server, so leave it out of the list.
+    const invitable = state.roles.filter(item => item.value !== 'owner');
+    $('#invite-role').innerHTML = roleOptions(invitable);
+    $('#access-role').innerHTML = roleOptions(state.roles);
 }
 
 function render() {
     const tenantID = state.selectedTenant;
     const selectedTenant = state.tenants.find(item => item.id === tenantID);
-    const canManageTenant = selectedTenant && ['owner', 'admin'].includes(selectedTenant.role);
+    const canManageApplications = grants(selectedTenant, 'applications.manage');
+    const canManageKeys = grants(selectedTenant, 'keys.manage');
+    const canManageContracts = grants(selectedTenant, 'contracts.manage');
+    const canManageUsers = grants(selectedTenant, 'users.manage');
     const tenantApps = state.applications.filter(item => item.tenant_id === tenantID);
     const tenantAppIDs = new Set(tenantApps.map(item => item.id));
     const tenantKeys = state.keys.filter(item => tenantAppIDs.has(item.application_id));
@@ -60,12 +94,15 @@ function render() {
     $('#tenant-context').innerHTML = state.tenants.map(item => `<option value="${escapeHTML(item.id)}" ${item.id === tenantID ? 'selected' : ''}>${escapeHTML(item.name)}</option>`).join('');
     $('#new-tenant').hidden = !state.is_system_administrator;
     $('#tenant-list').innerHTML = state.tenants.map(item => `<article class="card"><span class="badge">${escapeHTML(item.role)}</span><h3>${escapeHTML(item.name)}</h3><p>${escapeHTML(item.slug)}</p><div class="meta"><span>Tenant</span><code>${escapeHTML(item.id.slice(0, 8))}</code></div></article>`).join('') || empty('No tenants yet');
-    $('#app-list').innerHTML = tenantApps.map(item => `<article class="card"><span class="badge">${escapeHTML(item.tenant_slug)}</span><h3>${escapeHTML(item.name)}</h3><p>${escapeHTML(item.description || 'No description')}</p><div class="meta"><span>${item.client_ready ? 'Client login ready' : 'Client login not configured'}</span><code>${escapeHTML(item.client_id)}</code></div>${canManageTenant ? `<button class="card-action" data-client="${escapeHTML(item.id)}">Configure client login</button>` : ''}</article>`).join('') || empty('No applications yet');
-    $('#key-list').innerHTML = tenantKeys.map(item => `<tr><td>${escapeHTML(item.name)}</td><td>${escapeHTML(apps.get(item.application_id)?.name || '—')}</td><td><code>${escapeHTML(item.prefix)}…</code></td><td><span class="badge">${escapeHTML(item.status)}</span></td><td>${date(item.last_used_at)}</td><td>${canManageTenant && item.status === 'active' ? `<button class="danger" data-revoke="${escapeHTML(item.id)}">Revoke</button>` : ''}</td></tr>`).join('') || rowEmpty(6, 'No keys issued');
+    $('#app-list').innerHTML = tenantApps.map(item => `<article class="card"><span class="badge">${escapeHTML(item.tenant_slug)}</span><h3>${escapeHTML(item.name)}</h3><p>${escapeHTML(item.description || 'No description')}</p><div class="meta"><span>${item.client_ready ? 'Client login ready' : 'Client login not configured'}</span><code>${escapeHTML(item.client_id)}</code></div>${canManageApplications ? `<button class="card-action" data-client="${escapeHTML(item.id)}">Configure client login</button>` : ''}</article>`).join('') || empty('No applications yet');
+    $('#key-list').innerHTML = tenantKeys.map(item => `<tr><td>${escapeHTML(item.name)}</td><td>${escapeHTML(apps.get(item.application_id)?.name || '—')}</td><td><code>${escapeHTML(item.prefix)}…</code></td><td><span class="badge">${escapeHTML(item.status)}</span></td><td>${date(item.last_used_at)}</td><td>${canManageKeys && item.status === 'active' ? `<button class="danger" data-revoke="${escapeHTML(item.id)}">Revoke</button>` : ''}</td></tr>`).join('') || rowEmpty(6, 'No keys issued');
     $('#contract-list').innerHTML = tenantContracts.map(item => `<tr><td>${escapeHTML(apps.get(item.application_id)?.name || '—')}</td><td>${escapeHTML(item.version)}</td><td>${item.endpoint_count}</td><td>${item.source_url ? `<a href="${escapeHTML(item.source_url)}" target="_blank" rel="noreferrer">source</a>` : 'Pasted'}</td><td>${date(item.created_at)}</td></tr>`).join('') || rowEmpty(5, 'No contracts imported');
     const pending = state.is_system_administrator ? state.pending_users.map(item => `<tr><td><strong>${escapeHTML(item.display_name)}</strong><br><small>${escapeHTML(item.email)}</small></td><td>Waiting room</td><td>—</td><td><span class="badge">pending</span></td><td>0</td><td><button class="card-action" data-pending="${escapeHTML(item.id)}">Approve</button></td></tr>`).join('') : '';
-    $('#user-list').innerHTML = tenantUsers.map(item => `<tr><td><strong>${escapeHTML(item.display_name)}</strong><br><small>${escapeHTML(item.email)}</small></td><td>${escapeHTML(state.tenants.find(t => t.id === item.tenant_id)?.name || '—')}</td><td><span class="badge">${escapeHTML(item.role)}</span></td><td>${escapeHTML(item.status)}</td><td>${item.application_ids.length}</td><td>${canManageTenant ? `<button class="card-action" data-access="${escapeHTML(item.id)}" data-tenant="${escapeHTML(item.tenant_id)}">Manage</button>` : ''}</td></tr>`).join('') + pending || rowEmpty(6, 'No users');
-    $$('[data-tenant-action]').forEach(element => element.hidden = !canManageTenant);
+    $('#user-list').innerHTML = tenantUsers.map(item => `<tr><td>${avatarCell(item)}<strong>${escapeHTML(item.display_name)}</strong><br><small>${escapeHTML(item.email)}</small></td><td>${escapeHTML(state.tenants.find(t => t.id === item.tenant_id)?.name || '—')}</td><td><span class="badge">${escapeHTML(item.role)}</span></td><td>${escapeHTML(item.status)}</td><td>${item.application_ids.length}</td><td>${canManageUsers ? `<button class="card-action" data-access="${escapeHTML(item.id)}" data-tenant="${escapeHTML(item.tenant_id)}">Manage</button>` : ''}</td></tr>`).join('') + pending || rowEmpty(6, 'No users');
+    $$('[data-tenant-application-action]').forEach(element => element.hidden = !canManageApplications);
+    $$('[data-tenant-key-action]').forEach(element => element.hidden = !canManageKeys);
+    $$('[data-tenant-contract-action]').forEach(element => element.hidden = !canManageContracts);
+    $$('[data-tenant-user-action]').forEach(element => element.hidden = !canManageUsers);
     $$('.tenant-select').forEach(select => {
         select.innerHTML = state.tenants.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)}</option>`).join('');
         select.value = tenantID;
@@ -74,6 +111,10 @@ function render() {
 }
 
 const empty = text => `<article class="card"><p>${text}</p></article>`;
+const initials = name => String(name || '?').split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(part => part[0].toUpperCase()).join('') || '?';
+const avatarCell = item => item.avatar_url
+    ? `<img class="avatar" src="${escapeHTML(item.avatar_url)}" alt="" width="28" height="28" loading="lazy">`
+    : `<span class="avatar avatar-empty">${escapeHTML(initials(item.display_name || item.email))}</span>`;
 const rowEmpty = (span, text) => `<tr><td colspan="${span}">${text}</td></tr>`;
 
 function formJSON(form) {

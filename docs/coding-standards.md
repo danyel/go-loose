@@ -8,6 +8,7 @@
 - Wrap errors with the operation; never log secrets, cookies, authorization headers, or full API keys.
 - Return explicit errors. Runtime authorization must fail closed.
 - Keep SQL tenant-aware: management queries must join through membership, and writes must enforce role in the query or transaction.
+- Derive authorization from the matrix in `internal/role` instead of hardcoding role names. Pass `role.Grants(...)` into SQL, use `role.Allows` in handlers, and render controls from the capability lists the server returns.
 - Use cryptographically secure randomness for credentials and constant-time comparison for signatures.
 - Format with `gofmt`; run `go test -race ./...`, `go vet ./...`, and `go build ./...`.
 
