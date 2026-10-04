@@ -107,10 +107,14 @@ func newTenant(t *testing.T, s *store.Store, ctx context.Context, owner, slug st
 	return tenant
 }
 
-// addMember invites a member into the tenant with the given role.
+// addMember invites a member into the tenant with the given built-in role.
 func addMember(t *testing.T, s *store.Store, ctx context.Context, owner string, tenantID, email, membershipRole string) string {
 	t.Helper()
-	member, err := s.InviteUser(ctx, owner, tenantID, email, email, membershipRole, "not-a-real-hash")
+	roleID, err := s.SystemRoleID(ctx, membershipRole)
+	if err != nil {
+		t.Fatalf("look up role %q: %v", membershipRole, err)
+	}
+	member, err := s.InviteUser(ctx, owner, tenantID, email, email, roleID, "not-a-real-hash")
 	if err != nil {
 		t.Fatalf("invite %s as %s: %v", email, membershipRole, err)
 	}
@@ -124,21 +128,21 @@ func TestMigrationsApplyAndRolesAreAccepted(t *testing.T) {
 	s, _, ctx := integrationStore(t)
 	owner := newUser(t, s, ctx, "owner@example.test")
 	tenant := newTenant(t, s, ctx, owner, "nmbs")
-	for _, item := range []role.Role{role.Developer, role.Operator, role.User} {
-		addMember(t, s, ctx, owner, tenant.ID, string(item)+"@example.test", string(item))
+	for _, item := range []string{"developer", "operator", "user"} {
+		addMember(t, s, ctx, owner, tenant.ID, item+"@example.test", item)
 	}
 	if _, err := s.ListTenants(ctx, owner); err != nil {
 		t.Fatalf("list tenants: %v", err)
 	}
 }
 
-func TestMembershipRoleConstraintRejectsUnknownRole(t *testing.T) {
+func TestUnknownRoleIDIsRefused(t *testing.T) {
 	s, _, ctx := integrationStore(t)
 	owner := newUser(t, s, ctx, "owner@example.test")
 	tenant := newTenant(t, s, ctx, owner, "nmbs")
-	member := addMember(t, s, ctx, owner, tenant.ID, "member@example.test", string(role.Viewer))
-	if err := s.SetUserAccess(ctx, owner, tenant.ID, member, "superuser", nil); err == nil {
-		t.Fatal("the database must reject a role outside the permission matrix")
+	member := addMember(t, s, ctx, owner, tenant.ID, "member@example.test", "viewer")
+	if err := s.SetUserAccess(ctx, owner, tenant.ID, member, "00000000-0000-0000-0000-000000000000", nil); err == nil {
+		t.Fatal("assigning a role that does not exist must be refused")
 	}
 }
 
@@ -153,24 +157,26 @@ func TestPermissionMatrixIsEnforcedInQueries(t *testing.T) {
 		t.Fatalf("owner cannot create an application: %v", err)
 	}
 	tests := []struct {
-		role              role.Role
+		role              string
 		canCreateApp      bool
 		canIssueKey       bool
 		canSaveContract   bool
 		canListManaged    bool
 		canConfigureClien bool
 	}{
-		{role: role.Owner, canCreateApp: true, canIssueKey: true, canSaveContract: true, canListManaged: true, canConfigureClien: true},
-		{role: role.Admin, canCreateApp: true, canIssueKey: true, canSaveContract: true, canListManaged: true, canConfigureClien: true},
-		{role: role.Developer, canCreateApp: true, canIssueKey: true, canSaveContract: true, canListManaged: false, canConfigureClien: true},
-		{role: role.Operator, canCreateApp: false, canIssueKey: true, canSaveContract: true, canListManaged: false, canConfigureClien: false},
-		{role: role.Viewer, canCreateApp: false, canIssueKey: false, canSaveContract: false, canListManaged: false, canConfigureClien: false},
-		{role: role.User, canCreateApp: false, canIssueKey: false, canSaveContract: false, canListManaged: false, canConfigureClien: false},
+		// owner and admin administer members; developer and operator may also
+		// maintain their own tenant's members, which is why they can list them.
+		{role: "owner", canCreateApp: true, canIssueKey: true, canSaveContract: true, canListManaged: true, canConfigureClien: true},
+		{role: "admin", canCreateApp: true, canIssueKey: true, canSaveContract: true, canListManaged: true, canConfigureClien: true},
+		{role: "developer", canCreateApp: true, canIssueKey: true, canSaveContract: true, canListManaged: true, canConfigureClien: true},
+		{role: "operator", canCreateApp: false, canIssueKey: true, canSaveContract: true, canListManaged: true, canConfigureClien: false},
+		{role: "viewer", canCreateApp: false, canIssueKey: false, canSaveContract: false, canListManaged: false, canConfigureClien: false},
+		{role: "user", canCreateApp: false, canIssueKey: false, canSaveContract: false, canListManaged: false, canConfigureClien: false},
 	}
 	for _, test := range tests {
-		t.Run(string(test.role), func(t *testing.T) {
-			member := addMember(t, s, ctx, owner, tenant.ID, string(test.role)+"@example.test", string(test.role))
-			slug := strings.ReplaceAll(string(test.role), "owner", "own")
+		t.Run(test.role, func(t *testing.T) {
+			member := addMember(t, s, ctx, owner, tenant.ID, test.role+"@example.test", test.role)
+			slug := strings.ReplaceAll(test.role, "owner", "own")
 
 			_, err := s.CreateApplication(ctx, member, store.Application{
 				TenantID: tenant.ID, Slug: slug, Name: slug, AllowedHosts: []string{},
@@ -201,8 +207,8 @@ func TestConsoleAccessExcludesSelfServiceMembers(t *testing.T) {
 	s, _, ctx := integrationStore(t)
 	owner := newUser(t, s, ctx, "owner@example.test")
 	tenant := newTenant(t, s, ctx, owner, "nmbs")
-	selfService := addMember(t, s, ctx, owner, tenant.ID, "enduser@example.test", string(role.User))
-	operator := addMember(t, s, ctx, owner, tenant.ID, "operator@example.test", string(role.Operator))
+	selfService := addMember(t, s, ctx, owner, tenant.ID, "enduser@example.test", "user")
+	operator := addMember(t, s, ctx, owner, tenant.ID, "operator@example.test", "operator")
 	waiting := newUser(t, s, ctx, "waiting@example.test")
 
 	for _, test := range []struct {
@@ -239,20 +245,25 @@ func TestTenantPermissionsComeFromTheRoleMatrix(t *testing.T) {
 	s, _, ctx := integrationStore(t)
 	owner := newUser(t, s, ctx, "owner@example.test")
 	tenant := newTenant(t, s, ctx, owner, "nmbs")
-	developer := addMember(t, s, ctx, owner, tenant.ID, "dev@example.test", string(role.Developer))
+	developer := addMember(t, s, ctx, owner, tenant.ID, "dev@example.test", "developer")
 
 	tenants, err := s.ListTenants(ctx, developer)
 	if err != nil {
 		t.Fatalf("list tenants: %v", err)
 	}
-	if len(tenants) != 1 || tenants[0].Role != string(role.Developer) {
+	if len(tenants) != 1 || tenants[0].Role != "developer" {
 		t.Fatalf("tenants = %+v", tenants)
 	}
 	if !contains(tenants[0].Permissions, string(role.ManageApplications)) {
 		t.Fatalf("developer permissions = %v", tenants[0].Permissions)
 	}
-	if contains(tenants[0].Permissions, string(role.ManageUsers)) {
-		t.Fatalf("developer permissions = %v, must not manage users", tenants[0].Permissions)
+	// developer administers members but must not mint roles, which is what
+	// defines privilege in the first place.
+	if !contains(tenants[0].Permissions, string(role.ManageUsers)) {
+		t.Fatalf("developer permissions = %v, want users.manage", tenants[0].Permissions)
+	}
+	if contains(tenants[0].Permissions, string(role.ManageRoles)) {
+		t.Fatalf("developer permissions = %v, must not manage roles", tenants[0].Permissions)
 	}
 }
 
@@ -260,7 +271,7 @@ func TestProfileRoundTrip(t *testing.T) {
 	s, _, ctx := integrationStore(t)
 	owner := newUser(t, s, ctx, "owner@example.test")
 	tenant := newTenant(t, s, ctx, owner, "nmbs")
-	member := addMember(t, s, ctx, owner, tenant.ID, "member@example.test", string(role.Operator))
+	member := addMember(t, s, ctx, owner, tenant.ID, "member@example.test", "operator")
 
 	before, err := s.Profile(ctx, member)
 	if err != nil {
@@ -269,7 +280,7 @@ func TestProfileRoundTrip(t *testing.T) {
 	if before.AvatarKey != nil || before.NameCustomized {
 		t.Fatalf("fresh profile = %+v", before)
 	}
-	if len(before.Memberships) != 1 || before.Memberships[0].Role != string(role.Operator) {
+	if len(before.Memberships) != 1 || before.Memberships[0].Role != "operator" {
 		t.Fatalf("memberships = %+v", before.Memberships)
 	}
 	if !contains(before.Memberships[0].Permissions, string(role.ManageKeys)) {
@@ -329,7 +340,7 @@ func TestPictureIsStoredAndReadableByKey(t *testing.T) {
 	s, _, ctx := integrationStore(t)
 	owner := newUser(t, s, ctx, "owner@example.test")
 	tenant := newTenant(t, s, ctx, owner, "nmbs")
-	member := addMember(t, s, ctx, owner, tenant.ID, "member@example.test", string(role.Viewer))
+	member := addMember(t, s, ctx, owner, tenant.ID, "member@example.test", "viewer")
 	key := "Zq1Yb3l0Rk9pT2h3ZjQ4eXh3YjFkNGQ3OTFhMmNkYThl"
 	payload := []byte{0x89, 'P', 'N', 'G', 1, 2, 3, 4}
 
@@ -425,7 +436,7 @@ func TestClientSessionReportsMembershipRoleAndPicture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create application: %v", err)
 	}
-	member := addMember(t, s, ctx, owner, tenant.ID, "member@example.test", string(role.Operator))
+	member := addMember(t, s, ctx, owner, tenant.ID, "member@example.test", "operator")
 	if _, err := s.ConfigureClient(ctx, owner, application.ID, []string{"https://app.example.test/callback"}, []byte("hash")); err != nil {
 		t.Fatalf("configure client: %v", err)
 	}
@@ -443,7 +454,7 @@ func TestClientSessionReportsMembershipRoleAndPicture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exchange authorization code: %v", err)
 	}
-	if user.Role != string(role.Operator) {
+	if user.Role != "operator" {
 		t.Fatalf("role = %q, want operator", user.Role)
 	}
 	if user.AvatarKey == nil {
@@ -453,7 +464,7 @@ func TestClientSessionReportsMembershipRoleAndPicture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client user by token: %v", err)
 	}
-	if byToken.Role != string(role.Operator) || byToken.AvatarKey == nil {
+	if byToken.Role != "operator" || byToken.AvatarKey == nil {
 		t.Fatalf("client user = %+v", byToken)
 	}
 }
@@ -480,8 +491,8 @@ func TestClientSessionWithoutMembershipFallsBackToUserRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exchange authorization code: %v", err)
 	}
-	if user.Role != string(role.User) {
-		t.Fatalf("role = %q, want the least privileged fallback %q", user.Role, role.User)
+	if user.Role != "user" {
+		t.Fatalf("role = %q, want the least privileged fallback %q", user.Role, "user")
 	}
 }
 

@@ -3,10 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
-
-	"github.com/danyel/go-loose/internal/role"
 )
 
 // Membership is one tenant role held by a user.
@@ -15,6 +14,7 @@ type Membership struct {
 	TenantSlug  string   `json:"tenant_slug"`
 	TenantName  string   `json:"tenant_name"`
 	Role        string   `json:"role"`
+	RoleID      string   `json:"role_id"`
 	Permissions []string `json:"permissions"`
 }
 
@@ -77,9 +77,14 @@ func (s *Store) Profile(ctx context.Context, userID string) (Profile, error) {
 	}
 	profile.Memberships = []Membership{}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT m.tenant_id, t.slug, t.name, m.role
+		SELECT m.tenant_id, t.slug, t.name, r.slug, m.role_id,
+		       COALESCE((
+		           SELECT json_agg(rp.permission ORDER BY rp.permission)
+		           FROM role_permissions rp WHERE rp.role_id = m.role_id
+		       ), '[]'::json)
 		FROM memberships m
 		JOIN tenants t ON t.id = m.tenant_id
+		JOIN roles r ON r.id = m.role_id
 		WHERE m.user_id = $1
 		ORDER BY t.name`, userID)
 	if err != nil {
@@ -88,10 +93,14 @@ func (s *Store) Profile(ctx context.Context, userID string) (Profile, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var item Membership
-		if err := rows.Scan(&item.TenantID, &item.TenantSlug, &item.TenantName, &item.Role); err != nil {
+		var permissions []byte
+		if err := rows.Scan(&item.TenantID, &item.TenantSlug, &item.TenantName, &item.Role,
+			&item.RoleID, &permissions); err != nil {
 			return Profile{}, err
 		}
-		item.Permissions = role.Role(item.Role).Permissions()
+		if err := json.Unmarshal(permissions, &item.Permissions); err != nil {
+			return Profile{}, err
+		}
 		profile.Memberships = append(profile.Memberships, item)
 	}
 	return profile, rows.Err()

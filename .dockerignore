@@ -3,4 +3,5 @@
 bin
 coverage.out
 google_secrets.json
+data
 

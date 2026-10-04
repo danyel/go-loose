@@ -8,27 +8,7 @@ import (
 
 	"github.com/danyel/go-loose/internal/key"
 	"github.com/danyel/go-loose/internal/password"
-	"github.com/danyel/go-loose/internal/role"
 )
-
-// assignableRole validates a role that an administrator may hand to an existing
-// member. Any known role qualifies, including owner, so that ownership can move
-// between accounts deliberately.
-func assignableRole(value string) (string, bool) {
-	parsed, ok := role.Parse(value)
-	return string(parsed), ok
-}
-
-// invitableRole validates a role for a new invitation. Ownership is established
-// by creating or claiming a tenant, so it is never granted here.
-func invitableRole(value string) (string, bool) {
-	for _, item := range role.Grantable() {
-		if string(item) == value {
-			return value, true
-		}
-	}
-	return "", false
-}
 
 func (s *Server) configureClient(w http.ResponseWriter, r *http.Request) {
 	var request struct {
@@ -79,7 +59,7 @@ func (s *Server) inviteUser(w http.ResponseWriter, r *http.Request) {
 		TenantID    string `json:"tenant_id"`
 		Email       string `json:"email"`
 		DisplayName string `json:"display_name"`
-		Role        string `json:"role"`
+		RoleID      string `json:"role_id"`
 		Password    string `json:"password"`
 	}
 	if !decodeJSON(w, r, &request) {
@@ -95,9 +75,8 @@ func (s *Server) inviteUser(w http.ResponseWriter, r *http.Request) {
 	if request.DisplayName == "" {
 		request.DisplayName = request.Email
 	}
-	invitedRole, ok := invitableRole(request.Role)
-	if !ok {
-		writeError(w, http.StatusBadRequest, "role must be one of "+strings.Join(role.GrantableValues(), ", "))
+	if strings.TrimSpace(request.RoleID) == "" {
+		writeError(w, http.StatusBadRequest, "role_id is required")
 		return
 	}
 	passwordHash, err := password.Hash(request.Password)
@@ -105,7 +84,7 @@ func (s *Server) inviteUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	user, err := s.store.InviteUser(r.Context(), claimsFrom(r).UserID, request.TenantID, request.Email, request.DisplayName, invitedRole, passwordHash)
+	user, err := s.store.InviteUser(r.Context(), claimsFrom(r).UserID, request.TenantID, request.Email, request.DisplayName, request.RoleID, passwordHash)
 	if err != nil {
 		s.handleStoreError(w, "invite user", err)
 		return
@@ -117,18 +96,17 @@ func (s *Server) inviteUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) setUserAccess(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		TenantID       string   `json:"tenant_id"`
-		Role           string   `json:"role"`
+		RoleID         string   `json:"role_id"`
 		ApplicationIDs []string `json:"application_ids"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	membershipRole, ok := assignableRole(request.Role)
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid role")
+	if strings.TrimSpace(request.RoleID) == "" {
+		writeError(w, http.StatusBadRequest, "role_id is required")
 		return
 	}
-	if err := s.store.SetUserAccess(r.Context(), claimsFrom(r).UserID, request.TenantID, r.PathValue("id"), membershipRole, request.ApplicationIDs); err != nil {
+	if err := s.store.SetUserAccess(r.Context(), claimsFrom(r).UserID, request.TenantID, r.PathValue("id"), request.RoleID, request.ApplicationIDs); err != nil {
 		s.handleStoreError(w, "update user access", err)
 		return
 	}
@@ -138,20 +116,19 @@ func (s *Server) setUserAccess(w http.ResponseWriter, r *http.Request) {
 func (s *Server) approveUser(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		TenantID       string   `json:"tenant_id"`
-		Role           string   `json:"role"`
+		RoleID         string   `json:"role_id"`
 		ApplicationIDs []string `json:"application_ids"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	membershipRole, ok := assignableRole(request.Role)
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid role")
+	if strings.TrimSpace(request.RoleID) == "" {
+		writeError(w, http.StatusBadRequest, "role_id is required")
 		return
 	}
 	if err := s.store.ApprovePendingUser(
 		r.Context(), claimsFrom(r).UserID, request.TenantID, r.PathValue("id"),
-		membershipRole, request.ApplicationIDs,
+		request.RoleID, request.ApplicationIDs,
 	); err != nil {
 		s.handleStoreError(w, "approve pending user", err)
 		return

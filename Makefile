@@ -1,6 +1,7 @@
 SHELL := /bin/sh
 
 GO_LOOSE_ADDR ?= :8081
+GO_LOOSE_PORT ?= 8081
 GO_LOOSE_BASE_URL ?= http://localhost:$(GO_LOOSE_PORT)
 GO_LOOSE_DATABASE_URL ?= postgres://goloose:goloose@localhost:5433/goloose?sslmode=disable
 GO_LOOSE_SESSION_SECRET ?= local-development-secret-change-me-now
@@ -29,8 +30,12 @@ integration-test:
 run:
 	go run ./cmd/go-loose
 
+# The variables above are exported for `make run`, but compose reads
+# GO_LOOSE_BASE_URL too and would inherit the local http://localhost:8081 value,
+# which then overrides the https:// defaults in docker-compose.yaml. Clearing it
+# for the compose targets lets compose apply its own defaults.
 compose-up:
-	docker compose up --build
+	GO_LOOSE_BASE_URL= docker compose up --build
 
 compose-down:
 	docker compose down

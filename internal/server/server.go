@@ -120,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 	// browser favicon request would redirect to /install and rotate its CSRF cookie.
 	mux.Handle("GET /{$}", s.requireSession(http.HandlerFunc(s.index)))
 	mux.Handle("GET /profile", s.requireSession(http.HandlerFunc(s.profilePage)))
+	mux.Handle("GET /roles", s.requireSession(http.HandlerFunc(s.rolesPage)))
 	mux.Handle("GET /api/v1/profile", s.requireSession(http.HandlerFunc(s.profile)))
 	mux.Handle("PUT /api/v1/profile", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.updateProfile))))
 	mux.Handle("GET /docs", s.requireSession(http.HandlerFunc(s.docs)))
@@ -134,6 +135,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/users", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.inviteUser))))
 	mux.Handle("PUT /api/v1/users/{id}/access", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.setUserAccess))))
 	mux.Handle("POST /api/v1/users/{id}/approve", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.approveUser))))
+	mux.Handle("GET /api/v1/roles", s.requireSession(http.HandlerFunc(s.listRoles)))
+	mux.Handle("POST /api/v1/roles", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.createRole))))
+	mux.Handle("PUT /api/v1/roles/{id}", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.updateRole))))
+	mux.Handle("DELETE /api/v1/roles/{id}", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.deleteRole))))
 	return s.recover(s.logRequests(s.securityHeaders(mux)))
 }
 
@@ -192,7 +197,7 @@ func (s *Server) openapi(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	name := path.Base(r.PathValue("name"))
-	if name != "style.css" && name != "app.js" && name != "profile.js" {
+	if name != "style.css" && name != "app.js" && name != "profile.js" && name != "roles.js" {
 		http.NotFound(w, r)
 		return
 	}
@@ -400,7 +405,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user": claims, "profile": s.profileResponse(profile),
 		"tenants": tenants, "applications": applications, "keys": keys, "contracts": contracts,
-		"users": users, "pending_users": pendingUsers, "roles": role.Catalog(),
+		"users": users, "pending_users": pendingUsers, "permissions": role.Catalog(),
 		"is_system_administrator": isSystemAdministrator,
 	})
 }
@@ -623,21 +628,79 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 	})
 }
 
+// requireSameOrigin rejects state-changing requests that did not come from the
+// page the session cookie belongs to.
+//
+// The comparison is made against the origin the request actually arrived on
+// rather than against cfg.BaseURL alone. A deployment whose configured base URL
+// disagrees with the address users browse to -- a reverse proxy terminating TLS,
+// a tenant subdomain, or simply a stale GO_LOOSE_BASE_URL -- would otherwise
+// reject every legitimate write. Deriving the scheme from the request keeps the
+// check anchored to r.Host, which is the part an attacker cannot influence: the
+// browser sets Origin itself and it always names the page's own host.
 func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		source := r.Header.Get("Origin")
 		if source == "" {
 			source = r.Header.Get("Referer")
 		}
-		sourceURL, sourceErr := url.Parse(source)
-		baseURL, baseErr := url.Parse(s.cfg.BaseURL)
-		if sourceErr != nil || baseErr != nil || sourceURL.Scheme != baseURL.Scheme ||
-			!strings.EqualFold(sourceURL.Host, r.Host) {
+		sourceURL, err := url.Parse(source)
+		if err != nil || !s.originAllowed(sourceURL, r) {
 			writeError(w, http.StatusForbidden, "same-origin request required")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// originAllowed reports whether source names the same origin as the request.
+// The configured base URL is accepted as well so that installations which
+// advertise a canonical address keep working when a request reaches the server
+// through a different but still legitimate hostname.
+func (s *Server) originAllowed(source *url.URL, r *http.Request) bool {
+	if source.Host == "" {
+		return false
+	}
+	baseScheme, baseHost := baseOrigin(s.cfg.BaseURL)
+	for _, candidate := range [][2]string{
+		{s.requestScheme(r), r.Host},
+		{baseScheme, baseHost},
+	} {
+		scheme, host := candidate[0], candidate[1]
+		if host == "" {
+			continue
+		}
+		if strings.EqualFold(source.Host, host) && strings.EqualFold(source.Scheme, scheme) {
+			return true
+		}
+	}
+	return false
+}
+
+// requestScheme reports the scheme the client used to reach this server. A
+// reverse proxy terminates TLS before the request arrives, so the forwarded
+// protocol takes precedence over the local connection state.
+func (s *Server) requestScheme(r *http.Request) string {
+	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded != "" {
+		if scheme, _, found := strings.Cut(forwarded, ","); found {
+			return strings.TrimSpace(scheme)
+		}
+		return strings.TrimSpace(forwarded)
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+// baseOrigin splits a configured base URL into its scheme and host, returning
+// empty strings when the value is missing or unparseable.
+func baseOrigin(baseURL string) (scheme, host string) {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return "", ""
+	}
+	return parsed.Scheme, parsed.Host
 }
 
 func (s *Server) securityHeaders(next http.Handler) http.Handler {

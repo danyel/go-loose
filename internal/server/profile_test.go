@@ -52,12 +52,17 @@ func TestAvatarURLIsAbsoluteAndOmittedWithoutKey(t *testing.T) {
 	}
 }
 
+// TestClientUserExposesRoleCapabilitiesAndPicture checks that the identity
+// handed to a client application carries the capabilities the store resolved for
+// the membership's role rather than anything the server infers.
 func TestClientUserExposesRoleCapabilitiesAndPicture(t *testing.T) {
 	server := profileTestServer()
 	key := "avatar-key"
 	payload := server.clientUser(store.ClientUser{
 		ID: "user-1", Email: "operator@example.test", DisplayName: "Operator",
-		TenantSlug: "nmbs", Application: "guess", Role: string(role.Operator), AvatarKey: &key,
+		TenantSlug: "nmbs", Application: "guess", Role: "operator",
+		Permissions: []string{string(role.ManageKeys), string(role.EditProfile)},
+		AvatarKey:   &key,
 	})
 	if payload.Role != "operator" {
 		t.Fatalf("role = %q", payload.Role)
@@ -65,17 +70,21 @@ func TestClientUserExposesRoleCapabilitiesAndPicture(t *testing.T) {
 	if !slices.Contains(payload.Permissions, string(role.ManageKeys)) {
 		t.Fatalf("permissions = %v, want keys.manage", payload.Permissions)
 	}
-	if slices.Contains(payload.Permissions, string(role.ManageUsers)) {
-		t.Fatalf("permissions = %v, must not grant users.manage to an operator", payload.Permissions)
+	if slices.Contains(payload.Permissions, string(role.ManageTenants)) {
+		t.Fatalf("permissions = %v, must not grant tenants.manage", payload.Permissions)
 	}
 	if !strings.HasSuffix(payload.AvatarURL, "/api/v1/avatars/avatar-key") {
 		t.Fatalf("avatar url = %q", payload.AvatarURL)
 	}
 }
 
+// TestClientUserWithoutMembershipIsLeastPrivileged documents the pass-through: a
+// user with no membership is reported with the permissions of the built-in User
+// role, which the store resolves, so an empty capability set reaches clients
+// rather than an error.
 func TestClientUserWithoutMembershipIsLeastPrivileged(t *testing.T) {
 	server := profileTestServer()
-	payload := server.clientUser(store.ClientUser{Role: string(role.User)})
+	payload := server.clientUser(store.ClientUser{Role: "user", Permissions: []string{string(role.EditProfile)}})
 	if payload.AvatarURL != "" {
 		t.Fatalf("avatar url = %q, want empty", payload.AvatarURL)
 	}
@@ -135,38 +144,6 @@ func TestUpdateProfileRejectsOversizedBody(t *testing.T) {
 	server.updateProfile(response, profileRequest(t, body))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
-	}
-}
-
-func TestInvitableRoleExcludesOwner(t *testing.T) {
-	if _, ok := invitableRole(string(role.Owner)); ok {
-		t.Fatal("an invitation must not be able to grant ownership")
-	}
-	for _, item := range role.Grantable() {
-		if _, ok := invitableRole(string(item)); !ok {
-			t.Fatalf("invitableRole(%q) = false", item)
-		}
-	}
-	for _, item := range []string{"", "superuser", "Owner", "user'", "owner"} {
-		if item == string(role.Owner) {
-			continue
-		}
-		if _, ok := invitableRole(item); ok {
-			t.Fatalf("invitableRole(%q) = true", item)
-		}
-	}
-}
-
-func TestAssignableRoleAcceptsEveryKnownRole(t *testing.T) {
-	for _, item := range role.All() {
-		if got, ok := assignableRole(string(item)); !ok || got != string(item) {
-			t.Fatalf("assignableRole(%q) = %q, %v", item, got, ok)
-		}
-	}
-	for _, item := range []string{"", "superuser", "Owner", "admin,owner"} {
-		if _, ok := assignableRole(item); ok {
-			t.Fatalf("assignableRole(%q) = true", item)
-		}
 	}
 }
 

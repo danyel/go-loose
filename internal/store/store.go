@@ -30,8 +30,8 @@ type Tenant struct {
 	Slug string `json:"slug"`
 	Name string `json:"name"`
 	Role string `json:"role"`
-	// Permissions is derived from Role so that the console and API clients read
-	// capabilities instead of re-implementing the role matrix.
+	// Permissions is read from the role's own rows rather than from a Go matrix,
+	// so a tenant that defines its own roles is described accurately.
 	Permissions []string `json:"permissions"`
 }
 
@@ -130,11 +130,13 @@ func (s *Store) Bootstrap(ctx context.Context, userID, tenantSlug, appSlug strin
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO memberships(tenant_id, user_id, role)
-		SELECT $1, $2, $3
-		WHERE NOT EXISTS (SELECT 1 FROM memberships WHERE tenant_id = $1)
-		   OR EXISTS (SELECT 1 FROM memberships WHERE tenant_id = $1 AND user_id = $2)
-		ON CONFLICT DO NOTHING`, tenantID, userID, role.Owner); err != nil {
+		INSERT INTO memberships(tenant_id, user_id, role_id)
+		SELECT $1, $2, r.id
+		FROM roles r
+		WHERE r.slug = $3 AND r.tenant_id IS NULL
+		  AND (NOT EXISTS (SELECT 1 FROM memberships WHERE tenant_id = $1)
+		       OR EXISTS (SELECT 1 FROM memberships WHERE tenant_id = $1 AND user_id = $2))
+		ON CONFLICT DO NOTHING`, tenantID, userID, "owner"); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `
@@ -157,9 +159,15 @@ func (s *Store) Bootstrap(ctx context.Context, userID, tenantSlug, appSlug strin
 
 func (s *Store) ListTenants(ctx context.Context, userID string) ([]Tenant, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.id, t.slug, t.name, m.role
+		SELECT t.id, t.slug, t.name, r.slug,
+		       COALESCE((
+		           SELECT json_agg(rp.permission ORDER BY rp.permission)
+		           FROM role_permissions rp
+		           WHERE rp.role_id = m.role_id
+		       ), '[]'::json)
 		FROM tenants t
 		JOIN memberships m ON m.tenant_id = t.id
+		JOIN roles r ON r.id = m.role_id
 		WHERE m.user_id = $1
 		ORDER BY t.name`, userID)
 	if err != nil {
@@ -169,10 +177,13 @@ func (s *Store) ListTenants(ctx context.Context, userID string) ([]Tenant, error
 	result := make([]Tenant, 0)
 	for rows.Next() {
 		var item Tenant
-		if err := rows.Scan(&item.ID, &item.Slug, &item.Name, &item.Role); err != nil {
+		var permissions []byte
+		if err := rows.Scan(&item.ID, &item.Slug, &item.Name, &item.Role, &permissions); err != nil {
 			return nil, err
 		}
-		item.Permissions = role.Role(item.Role).Permissions()
+		if err := json.Unmarshal(permissions, &item.Permissions); err != nil {
+			return nil, err
+		}
 		result = append(result, item)
 	}
 	return result, rows.Err()
@@ -190,11 +201,26 @@ func (s *Store) CreateTenant(ctx context.Context, userID, slug, name string) (Te
 	if err != nil {
 		return Tenant{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO memberships(tenant_id, user_id, role) VALUES ($1, $2, 'owner')`, tenant.ID, userID); err != nil {
+	// Whoever creates a tenant owns it.
+	var permissions []byte
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO memberships(tenant_id, user_id, role_id)
+		SELECT $1, $2, r.id FROM roles r
+		WHERE r.slug = 'owner' AND r.tenant_id IS NULL
+		RETURNING (SELECT slug FROM roles WHERE slug = 'owner' AND tenant_id IS NULL),
+		          COALESCE((
+		              SELECT json_agg(rp.permission ORDER BY rp.permission)
+		              FROM role_permissions rp
+		              JOIN roles granted ON granted.id = rp.role_id
+		              WHERE granted.slug = 'owner' AND granted.tenant_id IS NULL
+		          ), '[]'::json)`,
+		tenant.ID, userID).Scan(&tenant.Role, &permissions)
+	if err != nil {
 		return Tenant{}, err
 	}
-	tenant.Role = string(role.Owner)
-	tenant.Permissions = role.Owner.Permissions()
+	if err := json.Unmarshal(permissions, &tenant.Permissions); err != nil {
+		return Tenant{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return Tenant{}, err
 	}
@@ -237,14 +263,11 @@ func (s *Store) CreateApplication(ctx context.Context, userID string, app Applic
 	row := s.db.QueryRowContext(ctx, `
 		INSERT INTO applications(tenant_id, slug, name, description, allowed_hosts)
 		SELECT $1, $2, $3, $4, $5
-		WHERE EXISTS (
-			SELECT 1 FROM memberships
-			WHERE tenant_id = $1 AND user_id = $6 AND role = ANY($7)
-		)
+		WHERE `+permissionPredicate("$1", "$6", "$7")+`
 		RETURNING id, tenant_id, slug, name, description, to_json(allowed_hosts),
 		          client_id, to_json(redirect_uris), false`,
 		app.TenantID, app.Slug, app.Name, app.Description, app.AllowedHosts, userID,
-		role.Grants(role.ManageApplications))
+		string(role.ManageApplications))
 	var allowedHosts, redirectURIs []byte
 	err := row.Scan(&app.ID, &app.TenantID, &app.Slug, &app.Name, &app.Description, &allowedHosts, &app.ClientID, &redirectURIs, &app.ClientReady)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -287,10 +310,9 @@ func (s *Store) CreateAPIKey(ctx context.Context, userID, applicationID, name, p
 		INSERT INTO api_keys(tenant_id, application_id, name, prefix, secret_hash, expires_at, created_by)
 		SELECT a.tenant_id, a.id, $2, $3, $4, $5, $6
 		FROM applications a
-		JOIN memberships m ON m.tenant_id = a.tenant_id
-		WHERE a.id = $1 AND m.user_id = $6 AND m.role = ANY($7)
+		WHERE a.id = $1 AND `+permissionPredicate("a.tenant_id", "$6", "$7")+`
 		RETURNING id, application_id, name, prefix, status, expires_at, last_used_at, created_at`,
-		applicationID, name, prefix, hash, expiresAt, userID, role.Grants(role.ManageKeys)).
+		applicationID, name, prefix, hash, expiresAt, userID, string(role.ManageKeys)).
 		Scan(&item.ID, &item.ApplicationID, &item.Name, &item.Prefix, &item.Status, &item.ExpiresAt, &item.LastUsedAt, &item.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return APIKey{}, ErrNotFound
@@ -301,9 +323,8 @@ func (s *Store) CreateAPIKey(ctx context.Context, userID, applicationID, name, p
 func (s *Store) RevokeAPIKey(ctx context.Context, userID, keyID string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE api_keys k SET status = 'revoked', revoked_at = now()
-		FROM memberships m
-		WHERE k.id = $1 AND m.tenant_id = k.tenant_id AND m.user_id = $2 AND m.role = ANY($3)`,
-		keyID, userID, role.Grants(role.ManageKeys))
+		WHERE k.id = $1 AND `+permissionPredicate("k.tenant_id", "$2", "$3"),
+		keyID, userID, string(role.ManageKeys))
 	if err != nil {
 		return err
 	}
@@ -363,11 +384,10 @@ func (s *Store) SaveContract(ctx context.Context, userID, applicationID string, 
 		INSERT INTO openapi_contracts(application_id, version, source_url, document, created_by)
 		SELECT a.id, $2, $3, $4, $5
 		FROM applications a
-		JOIN memberships m ON m.tenant_id = a.tenant_id
-		WHERE a.id = $1 AND m.user_id = $5 AND m.role = ANY($6)
+		WHERE a.id = $1 AND `+permissionPredicate("a.tenant_id", "$5", "$6")+`
 		RETURNING id, application_id, version, source_url, created_at`,
 		applicationID, document.Version, sourceURL, document.JSON, userID,
-		role.Grants(role.ManageContracts)).
+		string(role.ManageContracts)).
 		Scan(&result.ID, &result.ApplicationID, &result.Version, &result.SourceURL, &result.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Contract{}, ErrNotFound

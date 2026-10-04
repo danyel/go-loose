@@ -6,130 +6,112 @@ import (
 	"testing"
 )
 
-func TestParseRejectsUnknownRoles(t *testing.T) {
-	tests := []struct {
-		value string
-		want  bool
-	}{
-		{value: "owner", want: true},
-		{value: "admin", want: true},
-		{value: "developer", want: true},
-		{value: "operator", want: true},
-		{value: "viewer", want: true},
-		{value: "user", want: true},
-		{value: "Owner", want: false},
-		{value: "", want: false},
-		{value: "superuser", want: false},
-		{value: "owner; DROP TABLE memberships", want: false},
+func TestParseRejectsUnknownPermissions(t *testing.T) {
+	valid := []string{
+		"console.read", "users.read", "applications.manage", "keys.manage",
+		"contracts.manage", "users.manage", "roles.manage", "tenants.manage",
+		"profile.edit",
 	}
-	for _, test := range tests {
-		t.Run(test.value, func(t *testing.T) {
-			_, ok := Parse(test.value)
-			if ok != test.want {
-				t.Fatalf("Parse(%q) ok = %v, want %v", test.value, ok, test.want)
-			}
-		})
+	for _, value := range valid {
+		if _, ok := Parse(value); !ok {
+			t.Errorf("Parse(%q) = not ok, want a permission", value)
+		}
 	}
-}
-
-func TestPermissionMatrix(t *testing.T) {
-	tests := []struct {
-		role       Role
-		permission Permission
-		want       bool
-	}{
-		{role: Owner, permission: ManageTenants, want: true},
-		{role: Owner, permission: ManageUsers, want: true},
-		{role: Admin, permission: ManageTenants, want: false},
-		{role: Admin, permission: ManageUsers, want: true},
-		{role: Admin, permission: ManageApplications, want: true},
-		{role: Developer, permission: ManageUsers, want: false},
-		{role: Developer, permission: ManageApplications, want: true},
-		{role: Developer, permission: ManageKeys, want: true},
-		{role: Developer, permission: ManageContracts, want: true},
-		{role: Operator, permission: ManageApplications, want: false},
-		{role: Operator, permission: ManageKeys, want: true},
-		{role: Operator, permission: ManageContracts, want: true},
-		{role: Viewer, permission: ManageKeys, want: false},
-		{role: Viewer, permission: ReadConsole, want: true},
-		{role: User, permission: ReadConsole, want: false},
-		{role: User, permission: ReadUsers, want: false},
-		{role: User, permission: EditProfile, want: true},
-	}
-	for _, test := range tests {
-		t.Run(string(test.role)+"/"+string(test.permission), func(t *testing.T) {
-			if got := test.role.Allows(test.permission); got != test.want {
-				t.Fatalf("Allows(%q) = %v, want %v", test.permission, got, test.want)
-			}
-		})
-	}
-}
-
-func TestEveryRoleCanEditItsOwnProfile(t *testing.T) {
-	for _, item := range All() {
-		if !item.Allows(EditProfile) {
-			t.Fatalf("role %q cannot edit its own profile", item)
+	for _, value := range []string{"", "Console.read", "console", "superuser", "users.manage; DROP TABLE roles"} {
+		if parsed, ok := Parse(value); ok {
+			t.Errorf("Parse(%q) = %q, want rejection", value, parsed)
 		}
 	}
 }
 
-func TestGrantsMatchAllows(t *testing.T) {
-	for _, permission := range ordered {
-		granted := Grants(permission)
-		for _, item := range All() {
-			if slices.Contains(granted, string(item)) != item.Allows(permission) {
-				t.Fatalf("Grants(%q) and Allows disagree for role %q", permission, item)
+func TestValidMatchesParse(t *testing.T) {
+	for _, permission := range Permissions() {
+		if !permission.Valid() {
+			t.Errorf("%q reports itself invalid", permission)
+		}
+		if parsed, ok := Parse(string(permission)); !ok || parsed != permission {
+			t.Errorf("Parse(%q) did not round-trip", permission)
+		}
+	}
+	if Permission("nope").Valid() {
+		t.Error("an unknown permission reports itself valid")
+	}
+}
+
+func TestPermissionsAreDottedNames(t *testing.T) {
+	for _, permission := range Permissions() {
+		name := string(permission)
+		if len(name) < 3 || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") {
+			t.Fatalf("%q is not a plausible permission name", name)
+		}
+		dot := false
+		for _, character := range name {
+			switch {
+			case character == '.':
+				dot = true
+			case character >= 'a' && character <= 'z', character >= '0' && character <= '9', character == '-':
+			default:
+				t.Fatalf("%q contains %q; permissions use lowercase words", name, character)
 			}
 		}
-	}
-}
-
-func TestGrantsListsRolesInPrivilegeOrder(t *testing.T) {
-	if got := Grants(ManageKeys); !slices.Equal(got, []string{"owner", "admin", "developer", "operator"}) {
-		t.Fatalf("Grants(ManageKeys) = %v", got)
-	}
-	if got := Grants(ManageUsers); !slices.Equal(got, []string{"owner", "admin"}) {
-		t.Fatalf("Grants(ManageUsers) = %v", got)
-	}
-	if got := Grants(ReadConsole); !slices.Contains(got, string(Owner)) || slices.Contains(got, string(User)) {
-		t.Fatalf("Grants(ReadConsole) = %v", got)
-	}
-}
-
-func TestCatalogCoversEveryRoleWithALabel(t *testing.T) {
-	entries := Catalog()
-	if len(entries) != len(catalog) {
-		t.Fatalf("Catalog() length = %d, want %d", len(entries), len(catalog))
-	}
-	for _, entry := range entries {
-		if entry.Label == "" {
-			t.Fatalf("role %q has no label", entry.Value)
-		}
-		parsed, ok := Parse(entry.Value)
-		if !ok {
-			t.Fatalf("catalog entry %q is not a known role", entry.Value)
-		}
-		if len(entry.Permissions) != len(parsed.Permissions()) {
-			t.Fatalf("role %q catalog permissions drifted from the matrix", entry.Value)
+		if !dot {
+			t.Errorf("%q should be a namespaced name", name)
 		}
 	}
 }
 
-func TestGrantableExcludesOwner(t *testing.T) {
-	for _, item := range Grantable() {
-		if item == Owner {
-			t.Fatal("owner must not be grantable through an invitation")
-		}
+func TestCatalogDescribesEveryPermission(t *testing.T) {
+	catalog := Catalog()
+	if len(catalog) != len(Permissions()) {
+		t.Fatalf("catalog has %d entries, want %d", len(catalog), len(Permissions()))
 	}
-	if len(GrantableValues()) != len(catalog)-1 {
-		t.Fatalf("GrantableValues() length = %d", len(GrantableValues()))
+	seen := make(map[string]bool, len(catalog))
+	for _, entry := range catalog {
+		if entry.Value == "" || entry.Label == "" || entry.Description == "" {
+			t.Errorf("incomplete catalog entry %+v", entry)
+		}
+		if seen[entry.Value] {
+			t.Errorf("permission %q appears twice in the catalog", entry.Value)
+		}
+		seen[entry.Value] = true
 	}
 }
 
-func TestPermissionsUseDottedNames(t *testing.T) {
-	for _, permission := range All()[0].Permissions() {
-		if !strings.Contains(permission, ".") {
-			t.Fatalf("permission %q should be a dotted capability name", permission)
+// TestCatalogFollowsDisplayOrder guards the order the console renders the
+// permission checkboxes in: the most sensitive capability first.
+func TestCatalogFollowsDisplayOrder(t *testing.T) {
+	catalog := Catalog()
+	want := []string{"tenants.manage", "roles.manage", "users.manage"}
+	for index, value := range want {
+		if catalog[index].Value != value {
+			t.Errorf("catalog[%d] = %q, want %q", index, catalog[index].Value, value)
 		}
+	}
+}
+
+func TestPermissionsReturnsACopy(t *testing.T) {
+	first := Permissions()
+	if len(first) == 0 {
+		t.Fatal("no permissions")
+	}
+	first[0] = "mutated"
+	if Permissions()[0] == "mutated" {
+		t.Error("Permissions exposed its backing array")
+	}
+}
+
+func TestValuesMatchesPermissions(t *testing.T) {
+	values := Values()
+	permissions := Permissions()
+	if len(values) != len(permissions) {
+		t.Fatalf("Values has %d entries, want %d", len(values), len(permissions))
+	}
+	for index, permission := range permissions {
+		if values[index] != string(permission) {
+			t.Errorf("Values()[%d] = %q, want %q", index, values[index], permission)
+		}
+	}
+	if !slices.Contains(values, string(ManageUsers)) {
+		t.Error("users.manage is missing from Values")
 	}
 }

@@ -1,175 +1,132 @@
-// Package role defines the tenant membership roles and the single permission
-// matrix that authorizes console and management behavior.
+// Package role defines the permission vocabulary that authorizes console and
+// management behavior.
 //
-// Roles are stored in memberships.role. Authorization decisions must derive
-// from Grants or Allows so that SQL role checks and Go checks cannot drift
-// apart.
+// Roles are rows in the roles table and their permissions live in
+// role_permissions, so a tenant can define its own and authorization is
+// resolved by the database rather than from a matrix held here. What belongs in
+// this package is the closed set of permissions a role may be granted, plus the
+// labels the console renders.
+//
+// Keep the permission list in step with the role_permissions_permission_check
+// constraint in migration 0006: a name that is not in both places cannot be
+// stored.
 package role
-
-// Role is a tenant membership role.
-type Role string
-
-const (
-	// Owner has full control of a tenant, including tenant-level settings.
-	Owner Role = "owner"
-	// Admin manages applications, credentials, contracts, and members.
-	Admin Role = "admin"
-	// Developer manages applications, credentials, and contracts.
-	Developer Role = "developer"
-	// Operator issues and revokes credentials and imports contracts.
-	Operator Role = "operator"
-	// Viewer reads the console without changing anything.
-	Viewer Role = "viewer"
-	// User is a self-service member. It carries no console access and exists so
-	// that end users of client applications still hold a tenant role that
-	// applications can read through /connect/userinfo.
-	User Role = "user"
-)
 
 // Permission is a capability granted by a role.
 type Permission string
 
 const (
-	ReadConsole        Permission = "console.read"
-	ReadUsers          Permission = "users.read"
+	// ReadConsole opens the management console. Self-service members lack it so
+	// that they are routed to their profile instead.
+	ReadConsole Permission = "console.read"
+	// ReadUsers lists a tenant's members and their roles.
+	ReadUsers Permission = "users.read"
+	// ManageApplications registers applications and configures their client
+	// credentials.
 	ManageApplications Permission = "applications.manage"
-	ManageKeys         Permission = "keys.manage"
-	ManageContracts    Permission = "contracts.manage"
-	ManageUsers        Permission = "users.manage"
-	ManageTenants      Permission = "tenants.manage"
-	EditProfile        Permission = "profile.edit"
+	// ManageKeys issues and revokes API keys.
+	ManageKeys Permission = "keys.manage"
+	// ManageContracts imports OpenAPI contracts.
+	ManageContracts Permission = "contracts.manage"
+	// ManageUsers invites members and changes the roles and application grants
+	// of existing ones.
+	ManageUsers Permission = "users.manage"
+	// ManageRoles creates and edits the tenant's own roles. Kept separate from
+	// ManageUsers because defining roles is what defines privilege.
+	ManageRoles Permission = "roles.manage"
+	// ManageTenants creates tenants and administers the installation.
+	ManageTenants Permission = "tenants.manage"
+	// EditProfile changes one's own display name and picture.
+	EditProfile Permission = "profile.edit"
 )
 
-// catalog lists every role in descending order of privilege.
-var catalog = []Role{Owner, Admin, Developer, Operator, Viewer, User}
-
-// grants is the permission matrix. ReadConsole is deliberately absent for User
-// so that self-service members are routed to the profile screen instead of the
-// management console.
-var grants = map[Role]map[Permission]bool{
-	Owner: {
-		ReadConsole: true, ReadUsers: true, ManageApplications: true, ManageKeys: true,
-		ManageContracts: true, ManageUsers: true, ManageTenants: true, EditProfile: true,
-	},
-	Admin: {
-		ReadConsole: true, ReadUsers: true, ManageApplications: true, ManageKeys: true,
-		ManageContracts: true, ManageUsers: true, EditProfile: true,
-	},
-	Developer: {
-		ReadConsole: true, ReadUsers: true, ManageApplications: true, ManageKeys: true,
-		ManageContracts: true, EditProfile: true,
-	},
-	Operator: {
-		ReadConsole: true, ReadUsers: true, ManageKeys: true, ManageContracts: true, EditProfile: true,
-	},
-	Viewer: {
-		ReadConsole: true, ReadUsers: true, EditProfile: true,
-	},
-	User: {
-		EditProfile: true,
-	},
-}
-
+// ordered lists every permission from most to least sensitive. The order is the
+// one the console renders checkboxes in.
 var ordered = []Permission{
-	ReadConsole, ReadUsers, ManageApplications, ManageKeys,
-	ManageContracts, ManageUsers, ManageTenants, EditProfile,
+	ManageTenants,
+	ManageRoles,
+	ManageUsers,
+	ManageApplications,
+	ManageKeys,
+	ManageContracts,
+	ReadUsers,
+	ReadConsole,
+	EditProfile,
 }
 
-// Entry describes a role for the console and for API clients.
+var known = map[Permission]bool{
+	ReadConsole:        true,
+	ReadUsers:          true,
+	ManageApplications: true,
+	ManageKeys:         true,
+	ManageContracts:    true,
+	ManageUsers:        true,
+	ManageRoles:        true,
+	ManageTenants:      true,
+	EditProfile:        true,
+}
+
+// Entry describes a permission for the console and for API clients.
 type Entry struct {
-	Value       string   `json:"value"`
-	Label       string   `json:"label"`
-	Permissions []string `json:"permissions"`
+	Value       string `json:"value"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
 }
 
-var labels = map[Role]string{
-	Owner:     "Owner",
-	Admin:     "Administrator",
-	Developer: "Developer",
-	Operator:  "Operator",
-	Viewer:    "Viewer",
-	User:      "User",
+var details = map[Permission]struct{ label, description string }{
+	ReadConsole:        {"Read console", "Open the management console and pick tenants."},
+	ReadUsers:          {"Read members", "List the members of a tenant and the roles they hold."},
+	ManageApplications: {"Manage applications", "Register applications and configure client credentials."},
+	ManageKeys:         {"Manage API keys", "Issue and revoke API keys."},
+	ManageContracts:    {"Manage contracts", "Import OpenAPI contracts and their endpoints."},
+	ManageUsers:        {"Manage members", "Invite members and change their roles and application grants."},
+	ManageRoles:        {"Manage roles", "Create and edit the roles of this tenant."},
+	ManageTenants:      {"Manage tenants", "Create tenants and administer the installation."},
+	EditProfile:        {"Edit own profile", "Change one's own display name and picture."},
 }
 
-// All returns every role ordered from most to least privileged.
-func All() []Role {
-	result := make([]Role, len(catalog))
-	copy(result, catalog)
+// Permissions returns every permission in display order.
+func Permissions() []Permission {
+	result := make([]Permission, len(ordered))
+	copy(result, ordered)
 	return result
 }
 
-// Catalog returns every role with its label and permissions so that the console
-// and API clients never hardcode the role list.
-func Catalog() []Entry {
-	result := make([]Entry, 0, len(catalog))
-	for _, item := range catalog {
-		result = append(result, Entry{Value: string(item), Label: labels[item], Permissions: item.Permissions()})
-	}
-	return result
-}
-
-// Parse converts a stored or submitted value into a Role.
-func Parse(value string) (Role, bool) {
-	candidate := Role(value)
-	if _, known := grants[candidate]; !known {
+// Parse validates a submitted permission name. Unknown values are rejected so
+// that a crafted payload cannot invent capabilities.
+func Parse(value string) (Permission, bool) {
+	candidate := Permission(value)
+	if !known[candidate] {
 		return "", false
 	}
 	return candidate, true
 }
 
-// Valid reports whether the value names a role.
-func (r Role) Valid() bool {
-	_, known := grants[r]
-	return known
+// Valid reports whether the value names a permission.
+func (p Permission) Valid() bool {
+	return known[p]
 }
 
-// Allows reports whether the role grants the permission.
-func (r Role) Allows(permission Permission) bool {
-	return grants[r][permission]
+// Catalog returns every permission with a label and description so that the
+// console and API clients never hardcode the list.
+func Catalog() []Entry {
+	result := make([]Entry, 0, len(ordered))
+	for _, permission := range ordered {
+		detail := details[permission]
+		result = append(result, Entry{
+			Value:       string(permission),
+			Label:       detail.label,
+			Description: detail.description,
+		})
+	}
+	return result
 }
 
-// Permissions returns the role's permissions in a stable order.
-func (r Role) Permissions() []string {
+// Values returns every permission as strings, for use as a SQL array parameter.
+func Values() []string {
 	result := make([]string, 0, len(ordered))
 	for _, permission := range ordered {
-		if r.Allows(permission) {
-			result = append(result, string(permission))
-		}
-	}
-	return result
-}
-
-// Grants returns the roles that grant a permission, for use as a SQL parameter
-// so that role checks in queries stay aligned with this matrix.
-func Grants(permission Permission) []string {
-	result := make([]string, 0, len(catalog))
-	for _, item := range catalog {
-		if item.Allows(permission) {
-			result = append(result, string(item))
-		}
-	}
-	return result
-}
-
-// Grantable returns the roles a tenant administrator may hand to a new member.
-// Ownership is not grantable during an invitation because it is established by
-// creating or claiming a tenant.
-func Grantable() []Role {
-	result := make([]Role, 0, len(catalog)-1)
-	for _, item := range catalog {
-		if item != Owner {
-			result = append(result, item)
-		}
-	}
-	return result
-}
-
-// GrantableValues returns Grantable as strings for a request payload.
-func GrantableValues() []string {
-	values := Grantable()
-	result := make([]string, len(values))
-	for index, item := range values {
-		result[index] = string(item)
+		result = append(result, string(permission))
 	}
 	return result
 }

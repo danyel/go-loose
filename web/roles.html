@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en" data-theme="tokyo" data-mode="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Go Loose · Roles</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="noise"></div>
+  <header>
+    <a class="brand" href="/"><span class="brand-mark">GL</span><span>Go Loose</span></a>
+    <nav>
+      <a href="/">Console</a>
+      <a href="/docs">API docs</a>
+      <label class="compact">Tenant<select id="tenant-context"></select></label>
+      <label class="compact">Theme
+        <select id="theme"><option value="tokyo">Tokyo Night</option><option value="catppuccin">Catppuccin</option><option value="tomorrow">Tomorrow</option><option value="kanagawa">Kanagawa</option></select>
+      </label>
+      <button id="mode" class="icon-button" title="Toggle light/dark mode">◐</button>
+      <a id="identity" class="identity" href="/profile"><img id="identity-avatar" alt="" width="22" height="22" hidden><span id="identity-name"></span></a>
+      <form action="/auth/logout" method="post"><button class="ghost" type="submit">Log out</button></form>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">ROLE MANAGEMENT</p>
+        <h1>Who may do<br><span>what, per tenant.</span></h1>
+        <p class="lede">A role is a named bundle of permissions. Built-in roles are shared by every tenant and cannot be edited; your own tenant can define as many more as it needs.</p>
+      </div>
+      <div class="status-card">
+        <div class="pulse"></div>
+        <div><strong id="role-summary">Roles</strong><span id="role-tenant">—</span></div>
+        <code id="role-count">—</code>
+      </div>
+    </section>
+
+    <div id="notice" class="notice" hidden></div>
+
+    <section class="stats" id="stats">
+      <article><span>Roles</span><strong id="stat-roles">—</strong></article>
+      <article><span>Built-in</span><strong id="stat-system">—</strong></article>
+      <article><span>Custom</span><strong id="stat-custom">—</strong></article>
+      <article><span>Assignable to you</span><strong id="stat-assignable">—</strong></article>
+    </section>
+
+    <section class="panel active" id="roles">
+      <div class="panel-head">
+        <div><p class="eyebrow">PERMISSION CATALOG</p><h2>Roles</h2></div>
+        <button id="new-role">New role</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Role</th><th>Slug</th><th>Permissions</th><th>Members</th><th>Assignable to you</th><th></th></tr></thead>
+          <tbody id="role-list"></tbody>
+        </table>
+      </div>
+      <p class="muted">You can only create and assign roles that grant no more than you already hold, so managing members can never be used to gain authority.</p>
+    </section>
+
+    <section class="panel active" id="permission-reference">
+      <div class="panel-head"><div><p class="eyebrow">VOCABULARY</p><h2>Permissions</h2></div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Permission</th><th>What it allows</th></tr></thead>
+          <tbody id="permission-list"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="role-dialog">
+    <form id="role-form">
+      <div class="dialog-head"><h3 id="role-dialog-title">New role</h3><button type="button" class="close">×</button></div>
+      <input type="hidden" name="role_id">
+      <label id="role-slug-label">Slug<input name="slug" required pattern="[a-z0-9][a-z0-9-]{1,62}" placeholder="release-manager"></label>
+      <label>Name<input name="name" required maxlength="100" placeholder="Release manager"></label>
+      <label>Description <small>(optional)</small><textarea name="description" maxlength="500" placeholder="Prepares releases."></textarea></label>
+      <fieldset><legend>Permissions</legend><div id="role-permissions" class="check-list"></div></fieldset>
+      <p class="muted" id="role-hint"></p>
+      <button type="submit">Save role</button>
+    </form>
+  </dialog>
+
+  <script src="/assets/roles.js" defer></script>
+</body>
+</html>

@@ -80,9 +80,11 @@ func (s *Store) Install(ctx context.Context, installation Installation, demoUser
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO memberships(tenant_id, user_id, role) VALUES ($1, $2, $3)
-			ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
-			tenantID, userID, role.Admin); err != nil {
+			INSERT INTO memberships(tenant_id, user_id, role_id)
+			SELECT $1, $2, r.id FROM roles r
+			WHERE r.slug = $3 AND r.tenant_id IS NULL
+			ON CONFLICT (tenant_id, user_id) DO UPDATE SET role_id = EXCLUDED.role_id`,
+			tenantID, userID, "admin"); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -115,8 +117,10 @@ func (s *Store) ClaimFirstSystemAdministrator(ctx context.Context, userID string
 		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO memberships(tenant_id, user_id, role)
-		SELECT id, $1, $2 FROM tenants ON CONFLICT DO NOTHING`, userID, role.Owner); err != nil {
+		INSERT INTO memberships(tenant_id, user_id, role_id)
+		SELECT id, $1, r.id FROM tenants, roles r
+		WHERE r.slug = 'owner' AND r.tenant_id IS NULL
+		ON CONFLICT DO NOTHING`, userID); err != nil {
 		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -128,14 +132,14 @@ func (s *Store) ClaimFirstSystemAdministrator(ctx context.Context, userID string
 }
 
 // HasConsoleAccess reports whether the user may read the management console.
-// System administrators always qualify; otherwise the membership role must
+// System administrators always qualify; otherwise one of their memberships must
 // grant console.read, which excludes self-service User members.
 func (s *Store) HasConsoleAccess(ctx context.Context, userID string) (bool, error) {
 	var allowed bool
 	err := s.db.QueryRowContext(ctx, `
 		SELECT EXISTS(SELECT 1 FROM system_administrators WHERE user_id = $1)
-		    OR EXISTS(SELECT 1 FROM memberships WHERE user_id = $1 AND role = ANY($2))`,
-		userID, role.Grants(role.ReadConsole)).Scan(&allowed)
+		    OR `+permissionPredicate("scoped.tenant_id", "$1", "$2"),
+		userID, string(role.ReadConsole)).Scan(&allowed)
 	return allowed, err
 }
 
@@ -183,7 +187,11 @@ func (s *Store) ListPendingUsers(ctx context.Context, administratorID string) ([
 	return result, rows.Err()
 }
 
-func (s *Store) ApprovePendingUser(ctx context.Context, administratorID, tenantID, userID, role string, applicationIDs []string) error {
+// ApprovePendingUser gives a waiting-room visitor their first membership.
+// Only a system administrator may do this, so the escalation guard that
+// normally limits role assignment does not apply: the administrator is acting
+// across tenants rather than inside one.
+func (s *Store) ApprovePendingUser(ctx context.Context, administratorID, tenantID, userID, roleID string, applicationIDs []string) error {
 	isAdministrator, err := s.IsSystemAdministrator(ctx, administratorID)
 	if err != nil {
 		return err
@@ -196,11 +204,17 @@ func (s *Store) ApprovePendingUser(ctx context.Context, administratorID, tenantI
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := resolveRoleID(ctx, tx, tenantID, roleID, role.Values()); err != nil {
+		return err
+	}
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO memberships(tenant_id, user_id, role)
+		INSERT INTO memberships(tenant_id, user_id, role_id)
 		SELECT $1, id, $3 FROM users WHERE id = $2
-		ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
-		tenantID, userID, role)
+		ON CONFLICT (tenant_id, user_id) DO UPDATE SET role_id = EXCLUDED.role_id`,
+		tenantID, userID, roleID)
+	if err != nil {
+		return err
+	}
 	if err != nil {
 		return err
 	}

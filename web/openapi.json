@@ -46,8 +46,9 @@
           "tenant_id": {"type": "string", "format": "uuid"},
           "tenant_slug": {"type": "string"},
           "tenant_name": {"type": "string"},
-          "role": {"type": "string", "enum": ["owner", "admin", "developer", "operator", "viewer", "user"]},
-          "permissions": {"type": "array", "items": {"type": "string"}}
+          "role": {"type": "string", "description": "Slug of the role, which may be a role this tenant defined."},
+          "role_id": {"type": "string", "format": "uuid", "description": "Identifier of the role row. Send this back when assigning the role."},
+          "permissions": {"type": "array", "items": {"$ref": "#/components/schemas/PermissionValue"}}
         }
       },
       "Profile": {
@@ -75,12 +76,45 @@
           "remove_avatar": {"type": "boolean"}
         }
       },
-      "RoleCatalogEntry": {
+      "Role": {
         "type": "object",
+        "description": "A named bundle of permissions. A built-in role has no tenant_id, is visible to every tenant, and cannot be edited or deleted. A tenant may define its own.",
+        "required": ["id", "slug", "name", "system", "permissions"],
         "properties": {
-          "value": {"type": "string"},
+          "id": {"type": "string", "format": "uuid"},
+          "tenant_id": {"type": "string", "format": "uuid", "description": "Absent for built-in roles."},
+          "slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"},
+          "name": {"type": "string", "minLength": 1, "maxLength": 100},
+          "description": {"type": "string", "maxLength": 500},
+          "system": {"type": "boolean", "description": "True for built-in roles, which are read only."},
+          "permissions": {"type": "array", "items": {"$ref": "#/components/schemas/PermissionValue"}},
+          "member_count": {"type": "integer", "description": "Members currently holding the role. A role that still has members cannot be deleted."},
+          "assignable": {"type": "boolean", "description": "Whether the caller may assign this role. False when the role grants a permission the caller does not hold, which is what stops role assignment becoming a way to gain authority."}
+        }
+      },
+      "PermissionValue": {
+        "type": "string",
+        "description": "The closed vocabulary of capabilities a role may grant. Mirrors internal/role and the role_permissions check constraint.",
+        "enum": ["tenants.manage", "roles.manage", "users.manage", "applications.manage", "keys.manage", "contracts.manage", "users.read", "console.read", "profile.edit"]
+      },
+      "PermissionEntry": {
+        "type": "object",
+        "description": "A permission with the label and description the console renders.",
+        "properties": {
+          "value": {"$ref": "#/components/schemas/PermissionValue"},
           "label": {"type": "string"},
-          "permissions": {"type": "array", "items": {"type": "string"}}
+          "description": {"type": "string"}
+        }
+      },
+      "RoleRequest": {
+        "type": "object",
+        "required": ["name", "permissions"],
+        "properties": {
+          "tenant_id": {"type": "string", "format": "uuid", "description": "Required when creating. Ignored when updating, which takes the role's own tenant."},
+          "slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$", "description": "Required when creating, and fixed for the life of the role."},
+          "name": {"type": "string", "minLength": 1, "maxLength": 100},
+          "description": {"type": "string", "maxLength": 500},
+          "permissions": {"type": "array", "items": {"$ref": "#/components/schemas/PermissionValue"}}
         }
       }
     }
@@ -300,7 +334,8 @@
         "tags": [
           "User Management"
         ],
-        "summary": "Invite a tenant user with an admin, developer, operator, viewer, or user role",
+        "summary": "Invite a tenant user with a role",
+        "description": "Requires users.manage in the tenant, which owner, admin, developer, and operator hold. role_id must name a role of that tenant whose permissions are a subset of the caller's own.",
         "security": [{"session": []}],
         "responses": {"201": {"description": "User invited"}}
       }
@@ -311,7 +346,7 @@
           "User Management"
         ],
         "summary": "Set tenant role and application access",
-        "description": "Any known role is accepted, including owner.",
+        "description": "Requires users.manage. The caller may not grant a role more powerful than their own, and may not demote the last owner of a tenant.",
         "security": [{"session": []}],
         "parameters": [{"in": "path", "name": "id", "required": true, "schema": {"type": "string", "format": "uuid"}}],
         "responses": {"204": {"description": "Access updated"}}
@@ -319,17 +354,53 @@
     },
     "/api/v1/roles": {
       "get": {
-        "tags": ["User Management"],
-        "summary": "List tenant roles with their capabilities",
+        "tags": ["Role Management"],
+        "summary": "List the roles available in a tenant",
+        "description": "Returns every built-in role plus the roles this tenant defined, each annotated with whether the caller may assign it.",
         "security": [{"session": []}],
-        "responses": {"200": {"description": "Role catalog", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/RoleCatalogEntry"}}}}}}
+        "parameters": [{"in": "query", "name": "tenant_id", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+        "responses": {"200": {"description": "Role catalog", "content": {"application/json": {"schema": {"type": "object", "properties": {"roles": {"type": "array", "items": {"$ref": "#/components/schemas/Role"}}}}}}}, "404": {"description": "Not a member of that tenant"}}
+      },
+      "post": {
+        "tags": ["Role Management"],
+        "summary": "Define a role for a tenant",
+        "description": "Requires roles.manage in the tenant. The role may not grant a permission the caller does not already hold, so an administrator cannot mint their way above their own authority.",
+        "security": [{"session": []}],
+        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/RoleRequest"}}}},
+        "responses": {"201": {"description": "Role created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Role"}}}}, "400": {"description": "Malformed slug or name, or an unknown permission"}, "404": {"description": "The caller does not hold roles.manage, or the role would exceed their authority"}, "409": {"description": "The slug is already used in this tenant"}}
+      }
+    },
+    "/api/v1/roles/{id}": {
+      "put": {
+        "tags": ["Role Management"],
+        "summary": "Rename a role and replace its permissions",
+        "description": "Built-in roles are immutable. Saving replaces the permissions of every member holding the role, so treat it as a live change.",
+        "security": [{"session": []}],
+        "parameters": [{"in": "path", "name": "id", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/RoleRequest"}}}},
+        "responses": {"200": {"description": "Role updated", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Role"}}}}, "400": {"description": "Malformed name or an unknown permission"}, "404": {"description": "Unknown role, a built-in role, or a role belonging to another tenant"}}
+      },
+      "delete": {
+        "tags": ["Role Management"],
+        "summary": "Delete one of the tenant's own roles",
+        "security": [{"session": []}],
+        "parameters": [{"in": "path", "name": "id", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+        "responses": {"204": {"description": "Role deleted"}, "404": {"description": "Unknown role, a built-in role, or a role belonging to another tenant"}, "409": {"description": "The role still has members"}}
+      }
+    },
+    "/roles": {
+      "get": {
+        "tags": ["Role Management"],
+        "summary": "Role management screen",
+        "security": [{"session": []}],
+        "responses": {"200": {"description": "HTML page"}}
       }
     },
     "/api/v1/users/{id}/approve": {
       "post": {
         "tags": ["User Management"],
         "summary": "Approve a waiting-room user into a tenant",
-        "description": "Requires a system administrator session.",
+        "description": "Requires a system administrator session. Unlike the tenant-scoped endpoints this is not limited by the caller's own role, because it grants a first membership across tenants.",
         "security": [{"session": []}],
         "parameters": [{"in": "path", "name": "id", "required": true, "schema": {"type": "string", "format": "uuid"}}],
         "responses": {"204": {"description": "User approved"}, "404": {"description": "User or permission not found"}}

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/danyel/go-loose/internal/key"
-	"github.com/danyel/go-loose/internal/role"
 	"github.com/danyel/go-loose/internal/store"
 )
 
@@ -33,7 +32,7 @@ func (s *Server) clientUser(user store.ClientUser) clientUserResponse {
 		ID: user.ID, Email: user.Email, DisplayName: user.DisplayName,
 		AvatarURL: s.avatarURL(user.AvatarKey), TenantID: user.TenantID,
 		TenantSlug: user.TenantSlug, ApplicationID: user.ApplicationID, Application: user.Application,
-		Role: user.Role, Permissions: role.Role(user.Role).Permissions(),
+		Role: user.Role, Permissions: user.Permissions,
 	}
 }
 

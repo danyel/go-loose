@@ -1,15 +1,12 @@
 const state = {
     tenants: [], applications: [], keys: [], contracts: [], users: [], pending_users: [],
-    roles: [], profile: null, selectedTenant: ''
+    roles: [], permissions: [], profile: null, selectedTenant: ''
 };
 // Capability names mirror internal/role. The server sends the grants for the
 // selected tenant so the console never re-implements the matrix.
 const grants = (tenant, permission) => Boolean(tenant?.permissions?.includes(permission));
 const $ = selector => document.querySelector(selector);
 
-const roleOptions = roles => roles
-    .map(item => `<option value="${escapeHTML(item.value)}">${escapeHTML(item.label)}</option>`)
-    .join('');
 const $$ = selector => [...document.querySelectorAll(selector)];
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({
     '&': '&amp;',
@@ -48,9 +45,26 @@ async function load() {
     const data = await api('/api/v1/dashboard');
     Object.assign(state, data);
     if (!state.tenants.some(tenant => tenant.id === state.selectedTenant)) state.selectedTenant = state.tenants[0]?.id || '';
+    await loadRoles();
     renderIdentity();
-    renderRoleOptions();
     render();
+}
+
+// loadRoles fetches the role catalog for the selected tenant. Roles are rows now
+// rather than a fixed list, so they have to be asked for per tenant, and the
+// server marks which ones the signed-in user is allowed to hand out.
+async function loadRoles() {
+    if (!state.selectedTenant) {
+        state.roles = [];
+        return
+    }
+    try {
+        state.roles = (await api(`/api/v1/roles?tenant_id=${encodeURIComponent(state.selectedTenant)}`)).roles
+    } catch (error) {
+        // A user who cannot read the role catalog still gets the rest of the
+        // console; the invite and access dialogs simply offer nothing.
+        state.roles = [];
+    }
 }
 
 function renderIdentity() {
@@ -66,11 +80,15 @@ function renderIdentity() {
     }
 }
 
-function renderRoleOptions() {
-    // Inviting an owner is rejected by the server, so leave it out of the list.
-    const invitable = state.roles.filter(item => item.value !== 'owner');
-    $('#invite-role').innerHTML = roleOptions(invitable);
-    $('#access-role').innerHTML = roleOptions(state.roles);
+// assignableRoles is what the invite and access dialogs may offer: the server
+// refuses to hand out a role more powerful than the caller's own, so offering
+// anything else would only produce an error.
+function assignableRoles() {
+    return state.roles.filter(item => item.assignable)
+}
+
+function roleLabel(roleID) {
+    return state.roles.find(item => item.id === roleID)?.name || roleID
 }
 
 function render() {
@@ -98,7 +116,8 @@ function render() {
     $('#key-list').innerHTML = tenantKeys.map(item => `<tr><td>${escapeHTML(item.name)}</td><td>${escapeHTML(apps.get(item.application_id)?.name || '—')}</td><td><code>${escapeHTML(item.prefix)}…</code></td><td><span class="badge">${escapeHTML(item.status)}</span></td><td>${date(item.last_used_at)}</td><td>${canManageKeys && item.status === 'active' ? `<button class="danger" data-revoke="${escapeHTML(item.id)}">Revoke</button>` : ''}</td></tr>`).join('') || rowEmpty(6, 'No keys issued');
     $('#contract-list').innerHTML = tenantContracts.map(item => `<tr><td>${escapeHTML(apps.get(item.application_id)?.name || '—')}</td><td>${escapeHTML(item.version)}</td><td>${item.endpoint_count}</td><td>${item.source_url ? `<a href="${escapeHTML(item.source_url)}" target="_blank" rel="noreferrer">source</a>` : 'Pasted'}</td><td>${date(item.created_at)}</td></tr>`).join('') || rowEmpty(5, 'No contracts imported');
     const pending = state.is_system_administrator ? state.pending_users.map(item => `<tr><td><strong>${escapeHTML(item.display_name)}</strong><br><small>${escapeHTML(item.email)}</small></td><td>Waiting room</td><td>—</td><td><span class="badge">pending</span></td><td>0</td><td><button class="card-action" data-pending="${escapeHTML(item.id)}">Approve</button></td></tr>`).join('') : '';
-    $('#user-list').innerHTML = tenantUsers.map(item => `<tr><td>${avatarCell(item)}<strong>${escapeHTML(item.display_name)}</strong><br><small>${escapeHTML(item.email)}</small></td><td>${escapeHTML(state.tenants.find(t => t.id === item.tenant_id)?.name || '—')}</td><td><span class="badge">${escapeHTML(item.role)}</span></td><td>${escapeHTML(item.status)}</td><td>${item.application_ids.length}</td><td>${canManageUsers ? `<button class="card-action" data-access="${escapeHTML(item.id)}" data-tenant="${escapeHTML(item.tenant_id)}">Manage</button>` : ''}</td></tr>`).join('') + pending || rowEmpty(6, 'No users');
+    $('#user-list').innerHTML = tenantUsers.map(item => `<tr><td>${avatarCell(item)}<strong>${escapeHTML(item.display_name)}</strong><br><small>${escapeHTML(item.email)}</small></td><td>${escapeHTML(state.tenants.find(t => t.id === item.tenant_id)?.name || '—')}</td><td><span class="badge">${escapeHTML(roleLabel(item.role_id) || item.role)}</span></td><td>${escapeHTML(item.status)}</td><td>${item.application_ids.length}</td><td>${canManageUsers ? `<button class="card-action" data-access="${escapeHTML(item.id)}" data-tenant="${escapeHTML(item.tenant_id)}">Manage</button>` : ''}</td></tr>`).join('') + pending || rowEmpty(6, 'No users');
+    renderRoleOptions();
     $$('[data-tenant-application-action]').forEach(element => element.hidden = !canManageApplications);
     $$('[data-tenant-key-action]').forEach(element => element.hidden = !canManageKeys);
     $$('[data-tenant-contract-action]').forEach(element => element.hidden = !canManageContracts);
@@ -108,6 +127,20 @@ function render() {
         select.value = tenantID;
     });
     $$('.app-select').forEach(select => select.innerHTML = tenantApps.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)}</option>`).join(''));
+}
+
+// renderRoleOptions fills both role pickers. The current value is preserved so
+// that re-rendering the table does not silently reset a pending edit.
+function renderRoleOptions() {
+    const options = assignableRoles();
+    const html = options.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)}</option>`).join('');
+    for (const id of ['#invite-role', '#access-role']) {
+        const select = $(id);
+        if (!select) continue;
+        const current = select.value;
+        select.innerHTML = html;
+        if (current && options.some(item => item.id === current)) select.value = current
+    }
 }
 
 const empty = text => `<article class="card"><p>${text}</p></article>`;
@@ -230,7 +263,10 @@ document.addEventListener('click', async event => {
         form.tenant_id.value = user.tenant_id;
         form.approval_mode.value = 'false';
         $('#approval-tenant-label').hidden = true;
-        form.role.value = user.role;
+        // A role the caller may not hand out is not in the picker, so fall back
+        // to the first one they can assign rather than submitting the old value.
+        const current = assignableRoles().some(item => item.id === user.role_id);
+        form.role_id.value = current ? user.role_id : assignableRoles()[0]?.id || '';
         renderAccessApps(user.tenant_id, user.application_ids);
         $('#access-dialog').showModal();
         return
@@ -242,7 +278,7 @@ document.addEventListener('click', async event => {
         form.approval_mode.value = 'true';
         $('#approval-tenant-label').hidden = false;
         form.approval_tenant_id.value = state.selectedTenant;
-        form.role.value = 'viewer';
+        form.role_id.value = assignableRoles()[0]?.id || '';
         renderAccessApps(state.selectedTenant, []);
         $('#access-dialog').showModal()
     }
@@ -269,8 +305,9 @@ mode.addEventListener('click', () => {
     document.documentElement.dataset.mode = next;
     localStorage.setItem('gl-mode', next)
 });
-$('#tenant-context').addEventListener('change', event => {
+$('#tenant-context').addEventListener('change', async event => {
     state.selectedTenant = event.target.value;
+    await loadRoles();
     render()
 });
 $('#access-form').approval_tenant_id.addEventListener('change', event => renderAccessApps(event.target.value, []));
