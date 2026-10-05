@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -22,7 +23,6 @@ import (
 	"github.com/danyel/go-loose/internal/config"
 	"github.com/danyel/go-loose/internal/contract"
 	"github.com/danyel/go-loose/internal/key"
-	"github.com/danyel/go-loose/internal/role"
 	"github.com/danyel/go-loose/internal/secretbox"
 	"github.com/danyel/go-loose/internal/session"
 	"github.com/danyel/go-loose/internal/store"
@@ -31,12 +31,16 @@ import (
 )
 
 type Server struct {
-	cfg        config.Config
-	store      *store.Store
-	db         *sql.DB
-	sessions   *session.Manager
-	oauth      *oauth2.Config
-	verifier   *oidc.IDTokenVerifier
+	cfg      config.Config
+	store    *store.Store
+	db       *sql.DB
+	sessions *session.Manager
+	oauth    *oauth2.Config
+	verifier *oidc.IDTokenVerifier
+	// endSession is the identity provider's logout endpoint, empty when the
+	// provider does not advertise one. It is what lets a sign-out here also end
+	// the provider session the other applications in the family share.
+	endSession string
 	authMu     sync.RWMutex
 	installed  atomic.Bool
 	httpClient *http.Client
@@ -70,7 +74,7 @@ func New(ctx context.Context, cfg config.Config, db *sql.DB, logger *slog.Logger
 		if decryptErr != nil {
 			return nil, fmt.Errorf("decrypt installed OIDC secret: %w", decryptErr)
 		}
-		if err := server.configureOIDC(ctx, installation.OIDCIssuer, installation.OIDCClientID, secret); err != nil {
+		if err := server.configureOIDC(ctx, installation.OIDCIssuer, installation.OIDCClientID, secret, installation.OIDCRedirectURL); err != nil {
 			return nil, err
 		}
 		server.installed.Store(true)
@@ -80,7 +84,7 @@ func New(ctx context.Context, cfg config.Config, db *sql.DB, logger *slog.Logger
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("load installation: %w", err)
 	} else if cfg.OIDCIssuer != "" && cfg.OIDCClientID != "" && cfg.OIDCClientSecret != "" {
-		if err := server.configureOIDC(ctx, cfg.OIDCIssuer, cfg.OIDCClientID, cfg.OIDCClientSecret); err != nil {
+		if err := server.configureOIDC(ctx, cfg.OIDCIssuer, cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURL); err != nil {
 			return nil, err
 		}
 		server.installed.Store(true)
@@ -139,6 +143,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/roles", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.createRole))))
 	mux.Handle("PUT /api/v1/roles/{id}", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.updateRole))))
 	mux.Handle("DELETE /api/v1/roles/{id}", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.deleteRole))))
+	mux.Handle("GET /api/v1/permissions", s.requireSession(http.HandlerFunc(s.listPermissions)))
+	mux.Handle("POST /api/v1/permissions", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.createPermission))))
+	mux.Handle("DELETE /api/v1/permissions/{name}", s.requireSession(s.requireSameOrigin(http.HandlerFunc(s.deletePermission))))
 	return s.recover(s.logRequests(s.securityHeaders(mux)))
 }
 
@@ -197,7 +204,8 @@ func (s *Server) openapi(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	name := path.Base(r.PathValue("name"))
-	if name != "style.css" && name != "app.js" && name != "profile.js" && name != "roles.js" {
+	if name != "style.css" && name != "app.js" && name != "profile.js" && name != "roles.js" &&
+		name != "account.js" {
 		http.NotFound(w, r)
 		return
 	}
@@ -210,9 +218,61 @@ func (s *Server) serveEmbedded(w http.ResponseWriter, name string) {
 		http.Error(w, "asset unavailable", http.StatusInternalServerError)
 		return
 	}
+
+	body := content
+	// HTML pages get the theme origin substituted in. It is a placeholder rather than
+	// a literal because the origin is deployment configuration, not build-time.
+	//
+	// With no origin configured the two theme lines are removed outright rather than
+	// emitted with an empty href. An empty href is a same-origin request to this
+	// application, which 404s: a broken stylesheet request in the console, and a
+	// styling bug report that points at the wrong service entirely.
+	if path.Ext(name) == ".html" {
+		body = applyThemeOrigin(content, s.cfg.ThemeBaseURL)
+	}
+
 	w.Header().Set("Content-Type", mime.TypeByExtension(path.Ext(name)))
-	w.Write(content)
+	w.Write(body)
 }
+
+// themeOriginPlaceholder is substituted into every HTML page. It is deliberately not
+// valid markup, so an unsubstituted page is obviously wrong rather than subtly so.
+const themeOriginPlaceholder = "__GO_LOOSE_THEME_ORIGIN__"
+
+// applyThemeOrigin substitutes the theme origin into an HTML page, or removes the
+// theme lines entirely when none is configured.
+func applyThemeOrigin(content []byte, base string) []byte {
+	// TrimSpace as well as the trailing slash: an environment variable set to spaces
+	// is a plausible accident, and it would otherwise produce a relative URL that
+	// resolves against this application and 404s.
+	origin := strings.TrimRight(strings.TrimSpace(base), "/")
+	if origin == "" {
+		return dropThemeLines(content)
+	}
+	return bytes.ReplaceAll(content, []byte(themeOriginPlaceholder), []byte(origin))
+}
+
+// dropThemeLines removes every line carrying a theme marker attribute. Markers are
+// used rather than the placeholder itself so that the <link> and the <script> can both
+// be removed: substituting an empty origin into the script URL would leave a module
+// import of this application's own /rt/v1/components.js, which does not exist.
+func dropThemeLines(content []byte) []byte {
+	lines := bytes.Split(content, []byte("\n"))
+	kept := make([][]byte, 0, len(lines))
+	for _, line := range lines {
+		if bytes.Contains(line, []byte(themeMarkerContract)) || bytes.Contains(line, []byte(themeMarkerScript)) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return bytes.Join(kept, []byte("\n"))
+}
+
+// Marker attributes on the theme lines, used only to find and remove them.
+const (
+	themeMarkerContract = "data-theme-contract"
+	themeMarkerScript   = "data-bananas-components"
+)
 
 func (s *Server) authStart(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("return") != "" || s.requestTenantSlug(r.Host) != "" {
@@ -342,10 +402,88 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, subject, em
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
+// authLogout ends the session and, where the identity provider supports it, the
+// provider session the rest of the family shares.
+//
+// Three things happen, in this order, and the order matters:
+//
+//  1. Every hosted-login session the user holds is revoked. Go Loose issues those
+//     bearer tokens, so this is what actually signs the user out of the tenant
+//     applications: their tokens stop resolving the moment this runs, without the
+//     other application being told or having to ask. It happens before the local
+//     cookie is cleared, because the user id is only available while the session
+//     still exists.
+//  2. The local management cookies are cleared.
+//  3. The browser is sent to the identity provider's logout endpoint, so the single
+//     sign-on session that every application in the family relies on ends too. If
+//     the provider does not advertise an endpoint, this step is skipped and the user
+//     lands back on the sign-in page: the local sign-out still happened, and the
+//     other applications end at their next token check rather than immediately.
 func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
+	// Read before clearing. A missing or expired session is not a failure to sign
+	// out, so the claims are best effort and the sign-out proceeds regardless.
+	claims, err := s.sessions.Get(r)
+	if err == nil {
+		if revoked, revokeErr := s.store.RevokeUserClientSessions(r.Context(), claims.UserID); revokeErr != nil {
+			s.logger.Error("revoke client sessions on logout", "error", revokeErr)
+		} else if revoked > 0 {
+			s.logger.Info("revoked client sessions on logout", "count", revoked, "user", claims.UserID)
+		}
+	}
+
 	s.sessions.Clear(w)
 	s.sessions.ClearShared(w, s.cfg.AuthDomain)
+
+	if target := s.providerLogoutURL(r); target != "" {
+		http.Redirect(w, r, target, http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// providerLogoutURL builds the identity provider logout URL, or an empty string when
+// this installation has no provider endpoint to send the browser to.
+//
+// The client id is sent instead of an id_token_hint deliberately. A hint would be
+// the precise way to end one particular provider session, but it means keeping a
+// live credential in the browser cookie between login and logout, and the cookie has
+// a size budget this codebase should not spend on it. Providers accept the client id
+// and the post-logout redirect on their own.
+func (s *Server) providerLogoutURL(r *http.Request) string {
+	endpoint, clientID := s.logoutConfiguration()
+	if endpoint == "" || clientID == "" {
+		return ""
+	}
+	target, err := url.Parse(endpoint)
+	if err != nil {
+		return ""
+	}
+	query := target.Query()
+	query.Set("client_id", clientID)
+	// Bounce back to the sign-in page so the provider has somewhere valid to send
+	// the browser. An unregistered redirect target is silently ignored by some
+	// providers, which would leave the user on the provider's own page.
+	query.Set("post_logout_redirect_uri", s.absoluteURL(r, "/login"))
+	target.RawQuery = query.Encode()
+	return target.String()
+}
+
+// absoluteURL resolves a local path against the request, honouring the address the
+// client actually used so that a tenant host does not receive a link to the apex.
+//
+// The request wins over cfg.BaseURL. BaseURL is a configuration value that is
+// routinely absent or stale -- it defaults to http://localhost:8080 -- so building
+// a link from it hands the browser an address it cannot load, and a page served
+// under a Content-Security-Policy of 'self' refuses it outright. The request's own
+// host is the one address known to be both reachable and same-origin.
+func (s *Server) absoluteURL(r *http.Request, path string) string {
+	if r != nil && r.Host != "" {
+		return s.requestScheme(r) + "://" + r.Host + path
+	}
+	if parsed, err := url.Parse(s.cfg.BaseURL); err == nil && parsed.Host != "" {
+		return parsed.Scheme + "://" + parsed.Host + path
+	}
+	return path
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
@@ -394,18 +532,23 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "check system administrator", err)
 		return
 	}
+	catalog, err := s.store.ListPermissions(r.Context())
+	if err != nil {
+		s.internalError(w, "list permissions", err)
+		return
+	}
 	profile, err := s.store.Profile(r.Context(), claims.UserID)
 	if err != nil {
 		s.internalError(w, "load profile", err)
 		return
 	}
 	for index := range users {
-		users[index].AvatarURL = s.avatarURL(users[index].AvatarKey)
+		users[index].AvatarURL = s.avatarPath(users[index].AvatarKey)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user": claims, "profile": s.profileResponse(profile),
 		"tenants": tenants, "applications": applications, "keys": keys, "contracts": contracts,
-		"users": users, "pending_users": pendingUsers, "permissions": role.Catalog(),
+		"users": users, "pending_users": pendingUsers, "permissions": catalog,
 		"is_system_administrator": isSystemAdministrator,
 	})
 }
@@ -431,6 +574,10 @@ func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := s.store.CreateTenant(r.Context(), claimsFrom(r).UserID, request.Slug, request.Name)
 	if err != nil {
+		if errors.Is(err, store.ErrTenantSlugTaken) {
+			writeError(w, http.StatusConflict, "a tenant with this slug already exists")
+			return
+		}
 		s.internalError(w, "create tenant", err)
 		return
 	}

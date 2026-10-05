@@ -12,6 +12,7 @@ type Installation struct {
 	OIDCIssuer           string
 	OIDCClientID         string
 	OIDCSecretCiphertext []byte
+	OIDCRedirectURL      string
 	SeededDemo           bool
 }
 
@@ -25,9 +26,9 @@ type DemoUser struct {
 func (s *Store) Installation(ctx context.Context) (Installation, error) {
 	var installation Installation
 	err := s.db.QueryRowContext(ctx, `
-		SELECT oidc_issuer, oidc_client_id, oidc_client_secret_ciphertext, seeded_demo
+		SELECT oidc_issuer, oidc_client_id, oidc_client_secret_ciphertext, oidc_redirect_url, seeded_demo
 		FROM installation_settings WHERE singleton = true`).
-		Scan(&installation.OIDCIssuer, &installation.OIDCClientID, &installation.OIDCSecretCiphertext, &installation.SeededDemo)
+		Scan(&installation.OIDCIssuer, &installation.OIDCClientID, &installation.OIDCSecretCiphertext, &installation.OIDCRedirectURL, &installation.SeededDemo)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Installation{}, ErrNotFound
 	}
@@ -41,9 +42,9 @@ func (s *Store) Install(ctx context.Context, installation Installation, demoUser
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO installation_settings(singleton, oidc_issuer, oidc_client_id, oidc_client_secret_ciphertext, seeded_demo)
-		VALUES (true, $1, $2, $3, $4)`,
-		installation.OIDCIssuer, installation.OIDCClientID, installation.OIDCSecretCiphertext, installation.SeededDemo); err != nil {
+		INSERT INTO installation_settings(singleton, oidc_issuer, oidc_client_id, oidc_client_secret_ciphertext, oidc_redirect_url, seeded_demo)
+		VALUES (true, $1, $2, $3, $4, $5)`,
+		installation.OIDCIssuer, installation.OIDCClientID, installation.OIDCSecretCiphertext, installation.OIDCRedirectURL, installation.SeededDemo); err != nil {
 		return err
 	}
 	if len(demoUsers) == 0 {
@@ -118,14 +119,14 @@ func (s *Store) ClaimFirstSystemAdministrator(ctx context.Context, userID string
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO memberships(tenant_id, user_id, role_id)
-		SELECT id, $1, r.id FROM tenants, roles r
+		SELECT t.id, $1, r.id FROM tenants t, roles r
 		WHERE r.slug = 'owner' AND r.tenant_id IS NULL
 		ON CONFLICT DO NOTHING`, userID); err != nil {
 		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO user_application_access(application_id, user_id, granted_by)
-		SELECT id, $1, $1 FROM applications ON CONFLICT DO NOTHING`, userID); err != nil {
+		SELECT a.id, $1, $1 FROM applications a ON CONFLICT DO NOTHING`, userID); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()

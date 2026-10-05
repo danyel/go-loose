@@ -1,0 +1,32 @@
+# Air watches this tree and rebuilds into ./dist on every change.
+# Used by `make compose-dev-up` (docker-compose.dev.yaml + Dockerfile.dev).
+# Docs: https://github.com/air-verse/air/blob/master/air_example.toml
+
+root = "/src"
+tmp_dir = "/tmp/air"
+log_file = "/tmp/air/build-errors.log"
+delay = 300
+stop_on_error = true
+stop_on_root_dir = true
+send_interrupt = true
+kill_delay = "2s"
+log_level = "info"
+
+[build]
+  # Output lands in ./dist on the host through the bind mount.
+  bin = "dist/go-loose"
+  cmd = "go build -trimpath -o ./dist/go-loose ./cmd/go-loose"
+  args_bin = []
+  # web/ is embedded with go:embed, so asset edits need a rebuild too.
+  include_ext = ["go", "html", "js", "css", "sql", "json", "yaml", "yml", "toml"]
+  include_dir = ["cmd", "internal", "client", "web"]
+  # data/db is the PostgreSQL volume and would otherwise trigger rebuilds.
+  exclude_dir = [".git", "dist", "data", "docs", "node_modules", "tmp"]
+  exclude_regex = ["_test\\.go$"]
+  exclude_unchanged = true
+  follow_symlink = true
+
+# Bind mounts do not deliver inotify events on Docker Desktop, so poll there.
+[misc]
+  poll = false
+  poll_interval = 300

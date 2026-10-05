@@ -126,19 +126,38 @@ Both `/connect/token` and `/connect/userinfo` return the caller's `role`, `permi
 
 ```json
 {
-  "sub": "9f0f...",
+  "id": "9f0f...",
   "email": "ada@example.com",
   "display_name": "Ada Lovelace",
   "avatar_url": "https://loose.example.com/api/v1/avatars/kZ3...",
+  "tenant_id": "2b41...",
+  "tenant_slug": "nmbs",
+  "application_id": "7c02...",
+  "application": "guess",
   "role": "developer",
-  "permissions": ["console.read", "profile.edit", "applications.manage", "keys.manage", "contracts.manage"],
-  "can": {"contracts.manage": true, "users.manage": false}
+  "permissions": [
+    "console.read",
+    "users.read",
+    "applications.manage",
+    "keys.manage",
+    "contracts.manage",
+    "users.manage",
+    "profile.edit"
+  ]
 }
 ```
 
-`avatar_url` is public by design, so it can be embedded directly with a plain image tag. It is an empty string when the user has not uploaded a picture. Read `can` rather than checking `role` by name; the client package builds it from the same matrix the console uses. See [roles and capabilities](roles.md).
+There is no `can` object on the wire. `avatar_url` is public by design, so it can be embedded directly with a plain image tag; it is an empty string when the user has not uploaded a picture.
 
-A user with no membership in the application's tenant still authenticates, but the role falls back to `user` with only `profile.edit`.
+Read `permissions` rather than testing `role` by name, because a tenant may define its own roles. The client package exposes the same check as a method:
+
+```go
+if user.Can("contracts.manage") {
+	// the role behind this session grants it
+}
+```
+
+A user with no membership in the application's tenant still authenticates, but falls back to the built-in `user` role, whose only permission is `profile.edit`. See [roles, permissions, and profiles](roles.md).
 
 ## Security and availability
 
@@ -147,7 +166,42 @@ A user with no membership in the application's tenant still authenticates, but t
 - Do not replace the middleware's fail-closed behavior with an allow-on-error fallback.
 - Apply CSRF protection to state-changing routes in the client application; the package handles login `state`, not your application forms.
 - The middleware checks Go Loose on every request for immediate revocation. Deploy Go Loose highly available and use a bounded HTTP timeout.
+- Signing out in Go Loose revokes every hosted-login session the user holds here, so
+  the client applications stop accepting their tokens on the next request. See
+  [Signing out across the family](#signing-out-across-the-family).
 - API-key authentication and browser-user authentication are independent. Use `client.Middleware` for service/API keys and `BrowserAuth.Middleware` for logged-in users.
+
+## Signing out across the family
+
+Applications in this family share one identity, so signing out has to mean more than
+clearing one cookie. `POST /auth/logout` does three things, in this order:
+
+1. **Revokes every hosted-login session the user holds.** Go Loose issues the bearer
+   tokens these applications authenticate with, so this is what actually signs them
+   out: their tokens stop resolving immediately, without the application being told
+   or having to ask. This step reads the session first, which is why it happens before
+   the cookie is cleared.
+2. **Clears the local management cookies** on the identity domain.
+3. **Sends the browser to the identity provider's logout endpoint**, when the provider
+   advertises one in its discovery document, so the single sign-on session ends too.
+
+Two consequences worth designing around:
+
+- **A client application is signed out on its next request, not by being notified.**
+  Its own session cookie still exists; the bearer token inside it has been revoked. An
+  application that only checks the session locally will appear signed in until its
+  next call to Go Loose, at which point it should treat the rejection as a sign-out and
+  return the browser to `/login`.
+- **Applications that authenticate against a different provider are not covered.**
+  The provider endpoint is read from the issuer Go Loose itself is configured with, so
+  this covers the applications that sign in through Go Loose. One pointed at a separate
+  identity provider needs its own end-session redirect.
+
+A provider that does not advertise `end_session_endpoint` is not an error: step 3 is
+skipped and the user lands back on the sign-in page, having still been signed out
+locally and revoked. Go Loose sends `client_id` and `post_logout_redirect_uri` rather
+than an `id_token_hint`, because a hint would mean keeping a live credential in the
+browser cookie between login and logout.
 
 ## Applications on the local platform
 

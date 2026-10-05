@@ -15,6 +15,9 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+// ErrTenantSlugTaken is returned when a tenant already uses the requested slug.
+var ErrTenantSlugTaken = errors.New("tenant slug is already in use")
+
 type Store struct {
 	db *sql.DB
 }
@@ -129,13 +132,21 @@ func (s *Store) Bootstrap(ctx context.Context, userID, tenantSlug, appSlug strin
 	if err != nil {
 		return err
 	}
+	// Ownership is granted only while the tenant still has none. The condition is
+	// about owners rather than about members: the installer's demonstration seed
+	// creates tenants that already hold administrators, and refusing ownership
+	// there would leave a local administrator bootstrapped afterwards with an
+	// account that can never reach the console. A tenant that already has an owner
+	// is still never taken over by a later bootstrap.
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO memberships(tenant_id, user_id, role_id)
 		SELECT $1, $2, r.id
 		FROM roles r
 		WHERE r.slug = $3 AND r.tenant_id IS NULL
-		  AND (NOT EXISTS (SELECT 1 FROM memberships WHERE tenant_id = $1)
-		       OR EXISTS (SELECT 1 FROM memberships WHERE tenant_id = $1 AND user_id = $2))
+		  AND NOT EXISTS (
+		      SELECT 1 FROM memberships m
+		      JOIN roles held ON held.id = m.role_id
+		      WHERE m.tenant_id = $1 AND held.slug = 'owner')
 		ON CONFLICT DO NOTHING`, tenantID, userID, "owner"); err != nil {
 		return err
 	}
@@ -198,6 +209,11 @@ func (s *Store) CreateTenant(ctx context.Context, userID, slug, name string) (Te
 	var tenant Tenant
 	err = tx.QueryRowContext(ctx, `INSERT INTO tenants(slug, name) VALUES ($1, $2) RETURNING id, slug, name`, slug, name).
 		Scan(&tenant.ID, &tenant.Slug, &tenant.Name)
+	if isUniqueViolation(err) {
+		// Reporting this as a generic failure would surface a 500 for what is an
+		// ordinary mistake, and the console has no way to explain it.
+		return Tenant{}, ErrTenantSlugTaken
+	}
 	if err != nil {
 		return Tenant{}, err
 	}

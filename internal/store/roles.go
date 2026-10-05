@@ -36,9 +36,9 @@ var (
 	ErrRoleInUse = errors.New("role is still assigned to members")
 	// ErrRoleSlugTaken is returned when a tenant already uses the requested slug.
 	ErrRoleSlugTaken = errors.New("role slug is already in use")
-	// ErrUnknownPermission is returned when a role is defined with a permission
-	// outside the vocabulary. It is a caller mistake rather than a server fault,
-	// so callers report it as a bad request.
+	// ErrUnknownPermission is returned when a role or catalog entry names a
+	// permission that is not in the catalog. It is a caller mistake rather than a
+	// server fault, so callers report it as a bad request.
 	ErrUnknownPermission = errors.New("unknown permission")
 )
 
@@ -143,25 +143,54 @@ func within(granted, held []string) bool {
 	return true
 }
 
-// normalizePermissions validates submitted permission names and returns them
-// deduplicated in vocabulary order, so a role cannot be stored with an invented
-// capability or an unstable order.
-func normalizePermissions(permissions []string) ([]string, error) {
+// normalizePermissions checks that every submitted name is in the catalog and
+// returns them deduplicated in a stable order. Validation moved from the Go
+// vocabulary to the database when permissions became rows, so a tenant-defined
+// permission can be granted like any other while an invented one still cannot be
+// stored.
+func normalizePermissions(ctx context.Context, q querier, permissions []string) ([]string, error) {
 	requested := make(map[string]bool, len(permissions))
 	for _, value := range permissions {
-		parsed, ok := role.Parse(value)
-		if !ok {
-			return nil, fmt.Errorf("%w: %q", ErrUnknownPermission, value)
+		name := strings.TrimSpace(value)
+		if name == "" {
+			continue
 		}
-		requested[string(parsed)] = true
+		var known bool
+		if err := q.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM permissions WHERE name = $1)`, name).Scan(&known); err != nil {
+			return nil, err
+		}
+		if !known {
+			return nil, fmt.Errorf("%w: %q", ErrUnknownPermission, name)
+		}
+		requested[name] = true
 	}
+	rows, err := q.QueryContext(ctx, `
+		SELECT name FROM permissions
+		WHERE name = ANY($1)
+		ORDER BY array_position(`+permissionOrder+`, name) NULLS LAST, name`, keys(requested))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 	result := make([]string, 0, len(requested))
-	for _, permission := range role.Permissions() {
-		if requested[string(permission)] {
-			result = append(result, string(permission))
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
 		}
+		result = append(result, name)
 	}
-	return result, nil
+	return result, rows.Err()
+}
+
+// keys returns the members of a set as a slice, for use as a SQL array parameter.
+func keys(set map[string]bool) []string {
+	result := make([]string, 0, len(set))
+	for name := range set {
+		result = append(result, name)
+	}
+	return result
 }
 
 // roleGrants reads a role's permissions.
@@ -280,21 +309,28 @@ func roleByID(ctx context.Context, q querier, roleID string) (Role, error) {
 // CreateRole adds a tenant's own role. The caller must hold roles.manage and may
 // not mint a role more powerful than one they already hold.
 func (s *Store) CreateRole(ctx context.Context, actorID, tenantID, slug, name, description string, permissions []string) (Role, error) {
-	granted, err := normalizePermissions(permissions)
-	if err != nil {
-		return Role{}, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Role{}, err
 	}
 	defer tx.Rollback()
-
-	held, err := heldPermissions(ctx, tx, actorID, tenantID)
+	granted, err := normalizePermissions(ctx, tx, permissions)
 	if err != nil {
 		return Role{}, err
 	}
-	if !within([]string{string(role.ManageRoles)}, held) || !within(granted, held) {
+
+	permitted, err := hasPermission(ctx, tx, actorID, tenantID, role.ManageRoles)
+	if err != nil {
+		return Role{}, err
+	}
+	if !permitted {
+		return Role{}, ErrNotFound
+	}
+	grantable, err := grantablePermissions(ctx, tx, actorID, tenantID)
+	if err != nil {
+		return Role{}, err
+	}
+	if !within(granted, grantable) {
 		return Role{}, ErrNotFound
 	}
 	created, err := insertRole(ctx, tx, tenantID, slug, name, description)
@@ -316,15 +352,15 @@ func (s *Store) CreateRole(ctx context.Context, actorID, tenantID, slug, name, d
 // UpdateRole renames a role and replaces its permissions. Built-in roles are
 // immutable and a tenant may only edit a role it owns.
 func (s *Store) UpdateRole(ctx context.Context, actorID, roleID, name, description string, permissions []string) (Role, error) {
-	granted, err := normalizePermissions(permissions)
-	if err != nil {
-		return Role{}, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Role{}, err
 	}
 	defer tx.Rollback()
+	granted, err := normalizePermissions(ctx, tx, permissions)
+	if err != nil {
+		return Role{}, err
+	}
 
 	existing, err := lockRole(ctx, tx, roleID)
 	if err != nil {
@@ -333,11 +369,18 @@ func (s *Store) UpdateRole(ctx context.Context, actorID, roleID, name, descripti
 	if existing.System || existing.TenantID == nil {
 		return Role{}, ErrNotFound
 	}
-	held, err := heldPermissions(ctx, tx, actorID, *existing.TenantID)
+	permitted, err := hasPermission(ctx, tx, actorID, *existing.TenantID, role.ManageRoles)
 	if err != nil {
 		return Role{}, err
 	}
-	if !within([]string{string(role.ManageRoles)}, held) || !within(granted, held) {
+	if !permitted {
+		return Role{}, ErrNotFound
+	}
+	grantable, err := grantablePermissions(ctx, tx, actorID, *existing.TenantID)
+	if err != nil {
+		return Role{}, err
+	}
+	if !within(granted, grantable) {
 		return Role{}, ErrNotFound
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -379,11 +422,18 @@ func (s *Store) DeleteRole(ctx context.Context, actorID, roleID string) error {
 	if err != nil {
 		return err
 	}
-	held, err := heldPermissions(ctx, tx, actorID, *existing.TenantID)
+	permitted, err := hasPermission(ctx, tx, actorID, *existing.TenantID, role.ManageRoles)
 	if err != nil {
 		return err
 	}
-	if !within([]string{string(role.ManageRoles)}, held) || !within(permissions, held) {
+	if !permitted {
+		return ErrNotFound
+	}
+	grantable, err := grantablePermissions(ctx, tx, actorID, *existing.TenantID)
+	if err != nil {
+		return err
+	}
+	if !within(permissions, grantable) {
 		return ErrNotFound
 	}
 	if existing.MemberCount > 0 {

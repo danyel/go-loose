@@ -149,18 +149,7 @@ function readAsDataURL(file) {
     })
 }
 
-const theme = $('#theme');
-theme.value = localStorage.getItem('gl-theme') || 'tokyo';
-document.documentElement.dataset.theme = theme.value;
-document.documentElement.dataset.mode = localStorage.getItem('gl-mode') || 'dark';
-theme.addEventListener('change', () => {
-    document.documentElement.dataset.theme = theme.value;
-    localStorage.setItem('gl-theme', theme.value)
-});
-$('#mode').addEventListener('click', () => {
-    const next = document.documentElement.dataset.mode === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.mode = next;
-    localStorage.setItem('gl-mode', next)
-});
+// The palette and appearance controls are the components shipped by the theme
+// service. See the note in app.js for why this file no longer drives them.
 
 load().catch(error => notice(error.message, true));

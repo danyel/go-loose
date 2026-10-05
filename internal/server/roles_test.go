@@ -103,8 +103,10 @@ func TestCreateRoleRejectsMalformedInputBeforeTouchingTheStore(t *testing.T) {
 		{"uppercase slug", `{"slug":"Release Manager","name":"Role","permissions":[]}`},
 		{"slug starting with a dash", `{"slug":"-role","name":"Role","permissions":[]}`},
 		{"empty name", `{"slug":"role","name":"   ","permissions":[]}`},
-		{"unknown permission", `{"slug":"role","name":"Role","permissions":["superpower"]}`},
 	}
+	// Permission names are not checked here: the catalog is a table, so an unknown
+	// name can only be caught by the store, which reports it as a bad request.
+	// See TestARoleCannotGrantAPermissionThatIsNotInTheCatalog.
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			server := profileTestServer()

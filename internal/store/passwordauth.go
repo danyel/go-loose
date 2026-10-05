@@ -6,6 +6,16 @@ import (
 	"errors"
 )
 
+// EnsurePasswordUser creates or updates the local account behind
+// GO_LOOSE_LOCAL_ADMIN_PASSWORD and bootstraps it into the installation.
+//
+// The local administrator is operator-supplied rather than created by a visitor,
+// so when the installation has no system administrator yet it claims the role.
+// Without that, a database-only deployment would have nobody able to create
+// tenants or approve waiting-room users, because both require the role that only
+// a first OIDC sign-in otherwise grants. The claim is a no-op once any system
+// administrator exists, so an installation already owned by a Google account is
+// left alone.
 func (s *Store) EnsurePasswordUser(ctx context.Context, email, displayName, passwordHash, tenantSlug, appSlug string) error {
 	user, err := s.UpsertUser(ctx, "local:"+email, email, displayName)
 	if err != nil {
@@ -15,6 +25,9 @@ func (s *Store) EnsurePasswordUser(ctx context.Context, email, displayName, pass
 		UPDATE users
 		SET password_hash = $2, password_changed_at = now()
 		WHERE id = $1 AND password_hash IS NULL`, user.ID, passwordHash); err != nil {
+		return err
+	}
+	if _, err := s.ClaimFirstSystemAdministrator(ctx, user.ID); err != nil {
 		return err
 	}
 	return s.Bootstrap(ctx, user.ID, tenantSlug, appSlug)

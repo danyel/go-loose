@@ -9,7 +9,6 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -32,23 +31,44 @@ func profileRequest(t *testing.T, body string) *http.Request {
 	return request.WithContext(context.WithValue(request.Context(), claimsKey, claims))
 }
 
-func TestAvatarURLIsAbsoluteAndOmittedWithoutKey(t *testing.T) {
+// The console reads its own picture through avatarPath, so it must be a relative
+// path: the configured base URL is absent or stale often enough that building an
+// absolute link from it yields an address the browser refuses to load.
+func TestAvatarPathIsRelativeAndOmittedWithoutKey(t *testing.T) {
 	server := profileTestServer()
-	if got := server.avatarURL(nil); got != "" {
-		t.Fatalf("avatarURL(nil) = %q, want empty", got)
+	if got := server.avatarPath(nil); got != "" {
+		t.Fatalf("avatarPath(nil) = %q, want empty", got)
 	}
 	empty := ""
-	if got := server.avatarURL(&empty); got != "" {
-		t.Fatalf("avatarURL(empty) = %q, want empty", got)
+	if got := server.avatarPath(&empty); got != "" {
+		t.Fatalf("avatarPath(empty) = %q, want empty", got)
 	}
 	key := "k"
-	got := server.avatarURL(&key)
-	if want := "https://auth.example.test/api/v1/avatars/k"; got != want {
+	if got, want := server.avatarPath(&key), "/api/v1/avatars/k"; got != want {
+		t.Fatalf("avatarPath() = %q, want %q", got, want)
+	}
+	// A base URL left at its default must not leak into a page's markup.
+	server.cfg.BaseURL = "http://localhost:8080"
+	if got := server.avatarPath(&key); got != "/api/v1/avatars/k" {
+		t.Fatalf("avatarPath() with default base URL = %q", got)
+	}
+}
+
+// Another origin, such as go-tell reading /connect/userinfo, cannot resolve a
+// relative path, so that form follows the request rather than the configuration.
+func TestAvatarURLFollowsTheRequestNotTheConfiguredBase(t *testing.T) {
+	server := profileTestServer()
+	key := "k"
+	request := httptest.NewRequest(http.MethodGet, "https://nmbs.auth.example.test/connect/userinfo", nil)
+	if got, want := server.avatarURL(request, &key), "https://nmbs.auth.example.test/api/v1/avatars/k"; got != want {
 		t.Fatalf("avatarURL() = %q, want %q", got, want)
 	}
-	parsed, err := url.Parse(got)
-	if err != nil || parsed.Path != "/api/v1/avatars/k" {
-		t.Fatalf("avatar url = %q, err = %v", got, err)
+	if got := server.avatarURL(request, nil); got != "" {
+		t.Fatalf("avatarURL(nil) = %q, want empty", got)
+	}
+	// Without a host to follow, the configured base is the only thing left.
+	if got, want := server.avatarURL(&http.Request{}, &key), "https://auth.example.test/api/v1/avatars/k"; got != want {
+		t.Fatalf("avatarURL() without a request host = %q, want %q", got, want)
 	}
 }
 
@@ -58,7 +78,8 @@ func TestAvatarURLIsAbsoluteAndOmittedWithoutKey(t *testing.T) {
 func TestClientUserExposesRoleCapabilitiesAndPicture(t *testing.T) {
 	server := profileTestServer()
 	key := "avatar-key"
-	payload := server.clientUser(store.ClientUser{
+	request := httptest.NewRequest(http.MethodGet, "https://auth.example.test/connect/userinfo", nil)
+	payload := server.clientUser(request, store.ClientUser{
 		ID: "user-1", Email: "operator@example.test", DisplayName: "Operator",
 		TenantSlug: "nmbs", Application: "guess", Role: "operator",
 		Permissions: []string{string(role.ManageKeys), string(role.EditProfile)},
@@ -84,7 +105,7 @@ func TestClientUserExposesRoleCapabilitiesAndPicture(t *testing.T) {
 // rather than an error.
 func TestClientUserWithoutMembershipIsLeastPrivileged(t *testing.T) {
 	server := profileTestServer()
-	payload := server.clientUser(store.ClientUser{Role: "user", Permissions: []string{string(role.EditProfile)}})
+	payload := server.clientUser(nil, store.ClientUser{Role: "user", Permissions: []string{string(role.EditProfile)}})
 	if payload.AvatarURL != "" {
 		t.Fatalf("avatar url = %q, want empty", payload.AvatarURL)
 	}

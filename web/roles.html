@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="dark light">
   <title>Go Loose · Roles</title>
   <link rel="stylesheet" href="/assets/style.css">
+  <link rel="stylesheet" href="__GO_LOOSE_THEME_ORIGIN__/rt/v1/contract.css" data-theme-contract>
 </head>
 <body>
   <div class="noise"></div>
@@ -15,12 +16,9 @@
       <a href="/">Console</a>
       <a href="/docs">API docs</a>
       <label class="compact">Tenant<select id="tenant-context"></select></label>
-      <label class="compact">Theme
-        <select id="theme"><option value="tokyo">Tokyo Night</option><option value="catppuccin">Catppuccin</option><option value="tomorrow">Tomorrow</option><option value="kanagawa">Kanagawa</option></select>
-      </label>
-      <button id="mode" class="icon-button" title="Toggle light/dark mode">◐</button>
-      <a id="identity" class="identity" href="/profile"><img id="identity-avatar" alt="" width="22" height="22" hidden><span id="identity-name"></span></a>
-      <form action="/auth/logout" method="post"><button class="ghost" type="submit">Log out</button></form>
+      <bananas-theme-selector id="theme"></bananas-theme-selector>
+      <bananas-appearance-toggle id="mode"></bananas-appearance-toggle>
+      <div data-account-menu></div>
     </nav>
   </header>
 
@@ -47,6 +45,20 @@
       <article><span>Assignable to you</span><strong id="stat-assignable">—</strong></article>
     </section>
 
+    <section class="panel active" id="permissions">
+      <div class="panel-head">
+        <div><p class="eyebrow">CATALOG</p><h2>Permissions</h2></div>
+        <button id="new-permission">Add permission</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Permission</th><th>Name</th><th>What it allows</th><th>Enforced</th><th>Roles</th><th></th></tr></thead>
+          <tbody id="permission-list"></tbody>
+        </table>
+      </div>
+      <p class="muted">Every role can grant any name on this list. The nine marked <strong>enforced</strong> are the ones this application checks before it acts, so granting one changes what the console lets you do. A permission you add here is reported to client applications through <code>/connect/userinfo</code>, which can then enforce it themselves, but no part of this console tests for it.</p>
+    </section>
+
     <section class="panel active" id="roles">
       <div class="panel-head">
         <div><p class="eyebrow">PERMISSION CATALOG</p><h2>Roles</h2></div>
@@ -62,12 +74,9 @@
     </section>
 
     <section class="panel active" id="permission-reference">
-      <div class="panel-head"><div><p class="eyebrow">VOCABULARY</p><h2>Permissions</h2></div></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Permission</th><th>What it allows</th></tr></thead>
-          <tbody id="permission-list"></tbody>
-        </table>
+      <div class="panel-head"><div><p class="eyebrow">HOW THEY ARE USED</p><h2>Reading a permission</h2></div></div>
+      <div class="check-list">
+        <p class="muted">A membership resolves to exactly one role, and that role resolves to a set of permissions. Every tenant-scoped statement asks the database whether the caller holds the permission it needs, so a tenant-defined role is enforced the same way a built-in one is. Assigning a role only succeeds when every permission it grants is one you already hold, which is what stops handing out a role from becoming a way to gain authority.</p>
       </div>
     </section>
   </main>
@@ -85,6 +94,19 @@
     </form>
   </dialog>
 
+  <dialog id="permission-dialog">
+    <form id="permission-form">
+      <div class="dialog-head"><h3>Add permission</h3><button type="button" class="close">×</button></div>
+      <label>Name<input name="name" required maxlength="100" pattern="[a-z0-9][a-z0-9]*(\.[a-z0-9]+)*" placeholder="reports.export"><small>lowercase words separated by dots</small></label>
+      <label>Label<input name="label" required maxlength="100" placeholder="Export reports"></label>
+      <label>Description <small>(optional)</small><textarea name="description" maxlength="500" placeholder="Allows a client application to export the tenant's reports."></textarea></label>
+      <p class="muted">This becomes selectable in every role. Nothing in this console checks for it; it is reported to client applications, which can enforce it themselves.</p>
+      <button type="submit">Add permission</button>
+    </form>
+  </dialog>
+
+  <script src="/assets/account.js" defer></script>
   <script src="/assets/roles.js" defer></script>
+  <script type="module" src="__GO_LOOSE_THEME_ORIGIN__/rt/v1/components.js" data-bananas-components></script>
 </body>
 </html>

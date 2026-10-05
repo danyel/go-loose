@@ -27,10 +27,10 @@ type clientUserResponse struct {
 	Permissions   []string `json:"permissions"`
 }
 
-func (s *Server) clientUser(user store.ClientUser) clientUserResponse {
+func (s *Server) clientUser(r *http.Request, user store.ClientUser) clientUserResponse {
 	return clientUserResponse{
 		ID: user.ID, Email: user.Email, DisplayName: user.DisplayName,
-		AvatarURL: s.avatarURL(user.AvatarKey), TenantID: user.TenantID,
+		AvatarURL: s.avatarURL(r, user.AvatarKey), TenantID: user.TenantID,
 		TenantSlug: user.TenantSlug, ApplicationID: user.ApplicationID, Application: user.Application,
 		Role: user.Role, Permissions: user.Permissions,
 	}
@@ -124,7 +124,7 @@ func (s *Server) clientToken(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token": token, "token_type": "Bearer",
-		"expires_in": int(time.Until(expiresAt).Seconds()), "user": s.clientUser(user),
+		"expires_in": int(time.Until(expiresAt).Seconds()), "user": s.clientUser(r, user),
 	})
 }
 
@@ -143,7 +143,7 @@ func (s *Server) clientUserInfo(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "load client user", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.clientUser(user))
+	writeJSON(w, http.StatusOK, s.clientUser(r, user))
 }
 
 func (s *Server) clientLogout(w http.ResponseWriter, r *http.Request) {

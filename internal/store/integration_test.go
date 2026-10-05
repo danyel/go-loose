@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -24,6 +25,7 @@ func integrationStore(t *testing.T) (*store.Store, *sql.DB, context.Context) {
 	if url == "" {
 		t.Skip("set GO_LOOSE_TEST_DATABASE_URL to run PostgreSQL integration tests")
 	}
+	requireScratchDatabase(t, url)
 	ctx := context.Background()
 	db, err := database.Open(ctx, url)
 	if err != nil {
@@ -37,6 +39,27 @@ func integrationStore(t *testing.T) (*store.Store, *sql.DB, context.Context) {
 		t.Fatalf("migrate: %v", err)
 	}
 	return store.New(db), db, ctx
+}
+
+// requireScratchDatabase refuses to run against anything that looks like a real
+// database. resetSchema drops every table in the public schema, so pointing
+// these tests at a development database destroys it. The database name must
+// contain "test" unless the operator opts out explicitly.
+func requireScratchDatabase(t *testing.T, rawURL string) {
+	t.Helper()
+	if os.Getenv("GO_LOOSE_TEST_DATABASE_DESTRUCTIVE") == "1" {
+		return
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse GO_LOOSE_TEST_DATABASE_URL: %v", err)
+	}
+	name := strings.TrimPrefix(parsed.Path, "/")
+	if !strings.Contains(strings.ToLower(name), "test") {
+		t.Fatalf("refusing to run integration tests against database %q: resetSchema drops every table. "+
+			"Point GO_LOOSE_TEST_DATABASE_URL at a scratch database whose name contains \"test\" "+
+			"(run `make integration-db` to create one), or set GO_LOOSE_TEST_DATABASE_DESTRUCTIVE=1 to override.", name)
+	}
 }
 
 // grantApplicationAccess inserts an application grant directly so that tests can

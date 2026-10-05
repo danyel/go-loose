@@ -108,14 +108,18 @@ func (s *Store) InviteUser(ctx context.Context, administratorID, tenantID, email
 		return ManagedUser{}, err
 	}
 	defer tx.Rollback()
-	held, err := heldPermissions(ctx, tx, administratorID, tenantID)
+	permitted, err := hasPermission(ctx, tx, administratorID, tenantID, role.ManageUsers)
 	if err != nil {
 		return ManagedUser{}, err
 	}
-	if !within([]string{string(role.ManageUsers)}, held) {
+	if !permitted {
 		return ManagedUser{}, ErrNotFound
 	}
-	resolved, err := resolveRoleID(ctx, tx, tenantID, roleID, held)
+	grantable, err := grantablePermissions(ctx, tx, administratorID, tenantID)
+	if err != nil {
+		return ManagedUser{}, err
+	}
+	resolved, err := resolveRoleID(ctx, tx, tenantID, roleID, grantable)
 	if err != nil {
 		return ManagedUser{}, err
 	}
@@ -161,14 +165,18 @@ func (s *Store) SetUserAccess(ctx context.Context, administratorID, tenantID, us
 		return err
 	}
 	defer tx.Rollback()
-	held, err := heldPermissions(ctx, tx, administratorID, tenantID)
+	permitted, err := hasPermission(ctx, tx, administratorID, tenantID, role.ManageUsers)
 	if err != nil {
 		return err
 	}
-	if !within([]string{string(role.ManageUsers)}, held) {
+	if !permitted {
 		return ErrNotFound
 	}
-	resolved, err := resolveRoleID(ctx, tx, tenantID, roleID, held)
+	grantable, err := grantablePermissions(ctx, tx, administratorID, tenantID)
+	if err != nil {
+		return err
+	}
+	resolved, err := resolveRoleID(ctx, tx, tenantID, roleID, grantable)
 	if err != nil {
 		return err
 	}
@@ -409,4 +417,49 @@ func (s *Store) RevokeClientSession(ctx context.Context, tokenHash []byte) error
 		return ErrNotFound
 	}
 	return nil
+}
+
+// RevokeUserClientSessions ends every hosted-login session belonging to a user and
+// reports how many were live.
+//
+// Go Loose issues the bearer tokens that tenant applications authenticate with, so
+// this is what makes signing out here sign you out there: the tokens stop resolving
+// immediately, without the other application having to be told or even to ask. It is
+// the part of single logout that is enforced here rather than at the identity
+// provider.
+//
+// A user with no sessions is not an error, so the count is returned rather than
+// ErrNotFound: logging out twice, or from a session that never used a client
+// application, must still succeed.
+func (s *Store) RevokeUserClientSessions(ctx context.Context, userID string) (int, error) {
+	if userID == "" {
+		return 0, nil
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE client_user_sessions SET revoked_at = now()
+		WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+	if err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(count), nil
+}
+
+// CountActiveClientSessions reports how many hosted-login sessions a user holds.
+// The account menu uses it to say whether signing out will reach other applications.
+func (s *Store) CountActiveClientSessions(ctx context.Context, userID string) (int, error) {
+	if userID == "" {
+		return 0, nil
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT count(*) FROM client_user_sessions
+		WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()`, userID).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }

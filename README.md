@@ -83,5 +83,28 @@ Development requires Go 1.27.1 or newer.
 
 Migrations run transactionally at startup and are tracked in `schema_migrations`. See the operations guide before creating one.
 
-`make integration-test` runs the store integration tests against `GO_LOOSE_TEST_DATABASE_URL`. Those tests drop every table in the target database, so point them at a scratch database.
+`make integration-db` creates the two scratch databases the database-backed tests use, and `make integration-test` runs them. Those tests drop every table they touch, so they refuse to run against a database whose name does not contain `test`. That guard exists because pointing them at a development database destroys it.
+
+### Hot reload
+
+`make compose-dev-up` starts a development stack that runs Go Loose under [Air](https://air-verse.github.io/). Air watches `cmd`, `internal`, `client`, and `web`, rebuilds on every change, and writes the binary to `./dist`. Changes to `web/` are embedded at build time, so editing a template, stylesheet, or script triggers a rebuild too. The server restarts in place and `/healthz` confirms it came back.
+
+```bash
+make compose-dev-up      # build the image, start postgres and Air
+make compose-dev-logs    # follow the rebuild and request logs
+make compose-dev-down    # stop and remove the stack
+```
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GO_LOOSE_DEV_PORT` | `8080` | Host port for the dev server |
+| `GO_LOOSE_POSTGRES_PORT` | `5433` | Host port for PostgreSQL |
+
+The dev stack binds mounts the source tree, so Air writes `dist/go-loose` as `root` inside the container. On Linux, delete it with `sudo rm dist/go-loose` if the file ownership gets in the way.
+
+`docker-compose.yaml` remains the stack that matches production: a distroless image, no dev login, and the `local-dev-edge` network. `docker-compose.dev.yaml` and `Dockerfile.dev` are development-only.
+
+The database is not bind mounted into the source tree: PostgreSQL stores its files as `0700` owned by its own user, which would make `go build ./...` fail to walk the directory. `docker-compose.yaml` uses the `db-data` volume and `docker-compose.dev.yaml` uses a separate `db-data-dev`, so `docker compose -f docker-compose.dev.yaml down -v` cannot reach the real database. Reach a database through the published `5433` port or `docker compose exec postgres psql -U goloose -d goloose`.
+
+The dev database starts empty and migrations rebuild it on boot. `make compose-dev-down` also empties `./dist`, because Air writes that binary as `root` inside the container.
 

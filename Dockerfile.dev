@@ -1,0 +1,21 @@
+ARG GO_VERSION=1.27.1
+ARG AIR_VERSION=v1.67.4
+
+FROM golang:${GO_VERSION}-alpine
+
+ARG AIR_VERSION
+
+RUN apk add --no-cache ca-certificates git \
+    && go install github.com/air-verse/air@${AIR_VERSION}
+
+ENV AIR_VERSION=${AIR_VERSION}
+ENV CGO_ENABLED=0
+ENV GOCACHE=/tmp/go-build
+ENV GOMODCACHE=/go/pkg/mod
+ENV GOFLAGS=-buildvcs=false
+
+WORKDIR /src
+
+EXPOSE 8080
+
+CMD ["air", "-c", ".air.toml"]

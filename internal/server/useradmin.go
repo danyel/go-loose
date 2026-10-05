@@ -89,7 +89,7 @@ func (s *Server) inviteUser(w http.ResponseWriter, r *http.Request) {
 		s.handleStoreError(w, "invite user", err)
 		return
 	}
-	user.AvatarURL = s.avatarURL(user.AvatarKey)
+	user.AvatarURL = s.avatarPath(user.AvatarKey)
 	writeJSON(w, http.StatusCreated, user)
 }
 

@@ -12,8 +12,6 @@ import (
 	"github.com/danyel/go-loose/web"
 )
 
-const googleDemoClientID = "554628171917-forvpfs44pqajv77dfhl503prfqnhor3.apps.googleusercontent.com"
-
 func (s *Server) installPage(w http.ResponseWriter, r *http.Request) {
 	if s.installed.Load() {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -31,7 +29,6 @@ func (s *Server) installPage(w http.ResponseWriter, r *http.Request) {
 	}
 	page := strings.NewReplacer(
 		"{{CSRF_TOKEN}}", html.EscapeString(csrfToken),
-		"{{GOOGLE_CLIENT_ID}}", googleDemoClientID,
 		"{{CALLBACK_URL}}", html.EscapeString(s.cfg.OIDCRedirectURL),
 	).Replace(string(content))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -56,36 +53,42 @@ func (s *Server) install(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "invalid installer form; reload the installer")
 		return
 	}
-	clientID := strings.TrimSpace(r.Form.Get("oidc_client_id"))
-	clientSecret := strings.TrimSpace(r.Form.Get("oidc_client_secret"))
-	if clientID == "" || clientSecret == "" {
-		writeError(w, http.StatusBadRequest, "Google client ID and client secret are required")
-		return
-	}
-	if err := s.configureOIDC(r.Context(), "https://accounts.google.com", clientID, clientSecret); err != nil {
-		writeError(w, http.StatusBadGateway, "Google OIDC discovery failed")
-		return
-	}
-	ciphertext, err := secretbox.Encrypt(s.cfg.SessionSecret, clientSecret)
-	if err != nil {
-		s.internalError(w, "encrypt OIDC secret", err)
+	issuer := strings.TrimSpace(r.Form.Get("field1"))
+	clientID := strings.TrimSpace(r.Form.Get("field2"))
+	clientSecret := strings.TrimSpace(r.Form.Get("field3"))
+	redirectURL := strings.TrimSpace(r.Form.Get("field4"))
+	if issuer == "" || clientID == "" || clientSecret == "" || redirectURL == "" {
+		writeError(w, http.StatusBadRequest, "All four fields are required")
 		return
 	}
 	seedDemo := r.Form.Get("seed_demo") == "on"
 	var demoUsers []store.DemoUser
+	var err error
 	if seedDemo {
 		demoUsers, err = buildDemoUsers()
 		if err != nil {
 			s.internalError(w, "hash demo credentials", err)
 			return
 		}
+	} else {
+		demoUsers = nil
+	}
+	ciphertext, encErr := secretbox.Encrypt(s.cfg.SessionSecret, clientSecret)
+	if encErr != nil {
+		s.internalError(w, "encrypt OIDC secret", encErr)
+		return
 	}
 	err = s.store.Install(r.Context(), store.Installation{
-		OIDCIssuer: "https://accounts.google.com", OIDCClientID: clientID,
-		OIDCSecretCiphertext: ciphertext, SeededDemo: seedDemo,
+		OIDCIssuer: issuer, OIDCClientID: clientID,
+		OIDCSecretCiphertext: ciphertext, OIDCRedirectURL: redirectURL, SeededDemo: seedDemo,
 	}, demoUsers)
 	if err != nil {
 		s.internalError(w, "complete installation", err)
+		return
+	}
+	// Configure OIDC in the running server
+	if err := s.configureOIDC(r.Context(), issuer, clientID, clientSecret, redirectURL); err != nil {
+		s.internalError(w, "configure OIDC", err)
 		return
 	}
 	s.installed.Store(true)

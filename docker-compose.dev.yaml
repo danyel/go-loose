@@ -1,0 +1,87 @@
+# Developer stack: docker compose -f docker-compose.dev.yaml up --build
+#
+# Runs Go Loose with Air for hot reload. Air rebuilds on every source change and
+# writes the binary to ./dist, which is bind mounted so you can inspect or run it
+# from the host. Only postgres is published; Go Loose is reached through the
+# proxy or with `docker compose ... exec`.
+#
+# The production-shaped compose file stays at docker-compose.yaml.
+services:
+  postgres:
+    image: postgres:17-alpine
+    ports:
+      - "${GO_LOOSE_POSTGRES_PORT:-5433}:5432"
+    environment:
+      POSTGRES_DB: goloose
+      POSTGRES_USER: goloose
+      POSTGRES_PASSWORD: goloose
+    volumes:
+      # Deliberately not the volume docker-compose.yaml uses: `down -v` on this
+      # file would otherwise delete the real database. The dev database is
+      # expendable and starts empty.
+      - db-data-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U goloose -d goloose"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - go_loose_dev_network
+
+  go-loose:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GO_LOOSE_ADDR: ":8080"
+      GO_LOOSE_BASE_URL: "${GO_LOOSE_BASE_URL:-http://localhost:8080}"
+      GO_LOOSE_AUTH_DOMAIN: "${GO_LOOSE_AUTH_DOMAIN:-localhost}"
+      GO_LOOSE_DATABASE_URL: "postgres://goloose:goloose@postgres:5432/goloose?sslmode=disable"
+      GO_LOOSE_SESSION_SECRET: "${GO_LOOSE_SESSION_SECRET:-local-development-secret-change-me-now}"
+      # Dev login skips OIDC so you can work without Google credentials.
+      GO_LOOSE_DEV_LOGIN: "${GO_LOOSE_DEV_LOGIN:-true}"
+      GO_LOOSE_DEV_USER: "${GO_LOOSE_DEV_USER:-admin@local.test}"
+      GO_LOOSE_LOCAL_LOGIN: "${GO_LOOSE_LOCAL_LOGIN:-true}"
+      GO_LOOSE_LOCAL_ADMIN_EMAIL: "${GO_LOOSE_LOCAL_ADMIN_EMAIL:-admin@goloose.local}"
+      GO_LOOSE_LOCAL_ADMIN_PASSWORD: "${GO_LOOSE_LOCAL_ADMIN_PASSWORD:-}"
+      GO_LOOSE_ALLOWED_EMAIL_DOMAINS: "${GO_LOOSE_ALLOWED_EMAIL_DOMAINS:-}"
+      GO_LOOSE_ALLOW_PRIVATE_CONTRACT_URLS: "${GO_LOOSE_ALLOW_PRIVATE_CONTRACT_URLS:-true}"
+      GO_LOOSE_BOOTSTRAP_TENANT: "${GO_LOOSE_BOOTSTRAP_TENANT:-nmbs}"
+      GO_LOOSE_BOOTSTRAP_APP: "${GO_LOOSE_BOOTSTRAP_APP:-guess}"
+      GO_LOOSE_OIDC_ISSUER: "${GO_LOOSE_OIDC_ISSUER:-}"
+      GO_LOOSE_OIDC_CLIENT_ID: "${GO_LOOSE_OIDC_CLIENT_ID:-}"
+      GO_LOOSE_OIDC_CLIENT_SECRET: "${GO_LOOSE_OIDC_CLIENT_SECRET:-}"
+      GO_LOOSE_OIDC_REDIRECT_URL: "${GO_LOOSE_OIDC_REDIRECT_URL:-}"
+    volumes:
+      # Source is mounted read-write so Air can write ./dist. Use
+      # :ro here if you only want the host copy of dist to be authoritative.
+      - ./:/src:cached
+      # The build output, per the Air config above.
+      - ./dist:/src/dist
+      # Keep build artifacts and the module cache out of the image layer.
+      - air-tmp:/tmp/air
+      - go-build-cache:/tmp/go-build
+      - go-mod-cache:/go/pkg/mod
+    ports:
+      - "${GO_LOOSE_DEV_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "/src/dist/go-loose", "-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    init: true
+    networks:
+      - go_loose_dev_network
+
+networks:
+  go_loose_dev_network:
+
+volumes:
+  db-data-dev:
+  air-tmp:
+  go-build-cache:
+  go-mod-cache:

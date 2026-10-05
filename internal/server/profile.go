@@ -128,16 +128,36 @@ func (s *Server) avatar(w http.ResponseWriter, r *http.Request) {
 func (s *Server) profileResponse(profile store.Profile) profileResponse {
 	return profileResponse{
 		ID: profile.ID, Email: profile.Email, DisplayName: profile.DisplayName,
-		AvatarURL: s.avatarURL(profile.AvatarKey), Memberships: profile.Memberships,
+		AvatarURL: s.avatarPath(profile.AvatarKey), Memberships: profile.Memberships,
 		IsSystemAdministrator: profile.IsSystemAdministrator, NameCustomized: profile.NameCustomized,
 		CreatedAt: profile.CreatedAt, LastLoginAt: profile.LastLoginAt,
 		ProfileUpdatedAt: profile.ProfileUpdatedAt, AvatarUpdatedAt: profile.AvatarUpdatedAt,
 	}
 }
 
-func (s *Server) avatarURL(key *string) string {
+// avatarPath returns the same-origin path of a stored profile picture.
+//
+// The picture is served by this application, so a page of this application must
+// reference it by a root-relative path. An absolute URL has to be built from
+// cfg.BaseURL, and that value is routinely absent, stale, or aimed at a canonical
+// address the browser is not using: it defaults to http://localhost:8080, which a
+// browser asked to load it from any other origin refuses, and this application's
+// own Content-Security-Policy allows images from 'self' only. A relative path is
+// correct by construction in every deployment.
+func (s *Server) avatarPath(key *string) string {
 	if key == nil || *key == "" {
 		return ""
 	}
-	return s.cfg.BaseURL + "/api/v1/avatars/" + *key
+	return "/api/v1/avatars/" + *key
+}
+
+// avatarURL is the absolute form, for the clients that read a picture from another
+// origin: /connect/userinfo is consumed by applications such as go-tell, which
+// cannot resolve a relative path against their own host.
+func (s *Server) avatarURL(r *http.Request, key *string) string {
+	path := s.avatarPath(key)
+	if path == "" {
+		return ""
+	}
+	return s.absoluteURL(r, path)
 }

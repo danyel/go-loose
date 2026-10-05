@@ -94,16 +94,30 @@
       },
       "PermissionValue": {
         "type": "string",
-        "description": "The closed vocabulary of capabilities a role may grant. Mirrors internal/role and the role_permissions check constraint.",
-        "enum": ["tenants.manage", "roles.manage", "users.manage", "applications.manage", "keys.manage", "contracts.manage", "users.read", "console.read", "profile.edit"]
+        "description": "The name of a catalog entry, such as users.manage or reports.export. Names are rows in the permission catalog, so an installation may add its own; the nine seeded ones are the capabilities the console enforces.",
+        "pattern": "^[a-z0-9][a-z0-9]*(\\.[a-z0-9]+)*$",
+        "maxLength": 100
       },
-      "PermissionEntry": {
+      "Permission": {
         "type": "object",
-        "description": "A permission with the label and description the console renders.",
+        "description": "An entry in the installation-wide permission catalog.",
+        "required": ["name", "label", "enforced"],
         "properties": {
-          "value": {"$ref": "#/components/schemas/PermissionValue"},
-          "label": {"type": "string"},
-          "description": {"type": "string"}
+          "name": {"$ref": "#/components/schemas/PermissionValue"},
+          "label": {"type": "string", "maxLength": 100},
+          "description": {"type": "string", "maxLength": 500},
+          "system": {"type": "boolean", "description": "True for the seeded capabilities, which cannot be deleted or renamed."},
+          "enforced": {"type": "boolean", "description": "True when the console itself checks for this permission, so granting it changes what the console allows. False for a permission added through the API: it is reported to client applications but nothing here tests for it."},
+          "role_count": {"type": "integer", "description": "Roles currently granting it. A permission that a role still grants cannot be deleted."}
+        }
+      },
+      "PermissionRequest": {
+        "type": "object",
+        "required": ["name", "label"],
+        "properties": {
+          "name": {"$ref": "#/components/schemas/PermissionValue"},
+          "label": {"type": "string", "minLength": 1, "maxLength": 100},
+          "description": {"type": "string", "maxLength": 500}
         }
       },
       "RoleRequest": {
@@ -114,7 +128,8 @@
           "slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$", "description": "Required when creating, and fixed for the life of the role."},
           "name": {"type": "string", "minLength": 1, "maxLength": 100},
           "description": {"type": "string", "maxLength": 500},
-          "permissions": {"type": "array", "items": {"$ref": "#/components/schemas/PermissionValue"}}
+          "permissions": {"type": "array", "items": {"$ref": "#/components/schemas/PermissionValue"},
+                          "description": "Names from the permission catalog. An unknown name is rejected with 400."}
         }
       }
     }
@@ -364,7 +379,7 @@
       "post": {
         "tags": ["Role Management"],
         "summary": "Define a role for a tenant",
-        "description": "Requires roles.manage in the tenant. The role may not grant a permission the caller does not already hold, so an administrator cannot mint their way above their own authority.",
+        "description": "Requires roles.manage in the tenant. The role may not grant an enforced permission the caller does not already hold, so an administrator cannot mint their way above their own authority. Whoever administers the catalog may also grant the custom permissions they added, since nobody holds those yet.",
         "security": [{"session": []}],
         "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/RoleRequest"}}}},
         "responses": {"201": {"description": "Role created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Role"}}}}, "400": {"description": "Malformed slug or name, or an unknown permission"}, "404": {"description": "The caller does not hold roles.manage, or the role would exceed their authority"}, "409": {"description": "The slug is already used in this tenant"}}
@@ -386,6 +401,32 @@
         "security": [{"session": []}],
         "parameters": [{"in": "path", "name": "id", "required": true, "schema": {"type": "string", "format": "uuid"}}],
         "responses": {"204": {"description": "Role deleted"}, "404": {"description": "Unknown role, a built-in role, or a role belonging to another tenant"}, "409": {"description": "The role still has members"}}
+      }
+    },
+    "/api/v1/permissions": {
+      "get": {
+        "tags": ["Role Management"],
+        "summary": "List the permission catalog",
+        "description": "Every management session may read it, because the role editor renders its checkboxes from this list.",
+        "security": [{"session": []}],
+        "responses": {"200": {"description": "Catalog", "content": {"application/json": {"schema": {"type": "object", "properties": {"permissions": {"type": "array", "items": {"$ref": "#/components/schemas/Permission"}}}}}}}}
+      },
+      "post": {
+        "tags": ["Role Management"],
+        "summary": "Add a permission to the catalog",
+        "description": "Requires a system administrator or tenants.manage, because the catalog is shared by every tenant. The new name becomes grantable in any role and is reported through /connect/userinfo, but nothing in the console checks for it, so it cannot unlock console behaviour.",
+        "security": [{"session": []}],
+        "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/PermissionRequest"}}}},
+        "responses": {"201": {"description": "Permission added", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Permission"}}}}, "400": {"description": "Malformed name or label"}, "404": {"description": "The caller may not administer the catalog"}, "409": {"description": "The name is already in the catalog, including a seeded one"}}
+      }
+    },
+    "/api/v1/permissions/{name}": {
+      "delete": {
+        "tags": ["Role Management"],
+        "summary": "Delete a permission that no role grants",
+        "security": [{"session": []}],
+        "parameters": [{"in": "path", "name": "name", "required": true, "schema": {"$ref": "#/components/schemas/PermissionValue"}}],
+        "responses": {"204": {"description": "Permission deleted"}, "400": {"description": "Malformed name"}, "404": {"description": "Unknown permission or the caller may not administer the catalog"}, "409": {"description": "A role still grants it, or it is one of the seeded capabilities"}}
       }
     },
     "/roles": {

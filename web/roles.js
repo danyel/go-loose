@@ -31,28 +31,24 @@ async function api(path, options = {}) {
     return body
 }
 
+async function loadPermissions() {
+    try {
+        state.permissions = (await api('/api/v1/permissions')).permissions
+    } catch (error) {
+        notice('You do not have permission to read the permission catalog.', true)
+    }
+}
+
 async function load() {
     const dashboard = await api('/api/v1/dashboard');
     state.tenants = dashboard.tenants;
-    state.permissions = dashboard.permissions || [];
     if (!state.tenants.some(tenant => tenant.id === state.selectedTenant)) state.selectedTenant = state.tenants[0]?.id || '';
-    renderIdentity(dashboard.profile);
-    await loadRoles();
+    // Roles and the permission catalog are fetched from their own endpoints so
+    // that changing either does not need the whole dashboard reloaded.
+    await Promise.all([loadRoles(), loadPermissions()]);
     render()
 }
 
-function renderIdentity(profile) {
-    profile = profile || {};
-    $('#identity-name').textContent = profile.display_name || profile.email || '';
-    const image = $('#identity-avatar');
-    if (profile.avatar_url) {
-        image.src = profile.avatar_url;
-        image.hidden = false
-    } else {
-        image.hidden = true;
-        image.removeAttribute('src')
-    }
-}
 
 async function loadRoles() {
     if (!state.selectedTenant) {
@@ -72,6 +68,9 @@ function selectedTenant() {
 }
 
 const canManageRoles = () => Boolean(selectedTenant()?.permissions?.includes('roles.manage'));
+// The catalog is shared by every tenant, so changing it needs tenants.manage
+// rather than roles.manage.
+const canAdministerCatalog = () => Boolean(state.tenants.some(tenant => tenant.permissions?.includes('tenants.manage')));
 
 function render() {
     const tenant = selectedTenant();
@@ -86,6 +85,7 @@ function render() {
     $('#stat-custom').textContent = custom.length;
     $('#stat-assignable').textContent = state.roles.filter(item => item.assignable).length;
     $('#new-role').hidden = !canManageRoles();
+    $('#new-permission').hidden = !canAdministerCatalog();
 
     $('#role-list').innerHTML = state.roles.map(item => `<tr>
         <td><strong>${escapeHTML(item.name)}</strong>${item.system ? ' <span class="badge">built-in</span>' : ''}<br><small>${escapeHTML(item.description || 'No description')}</small></td>
@@ -93,20 +93,24 @@ function render() {
         <td class="capabilities">${item.permissions.map(permission => `<span class="chip">${escapeHTML(permission)}</span>`).join('') || '<span class="muted">None</span>'}</td>
         <td>${item.member_count}</td>
         <td>${item.assignable ? 'Yes' : '<span class="muted">No</span>'}</td>
-        <td>${item.system ? '' : canManageRoles() ? `<button class="card-action" data-edit="${escapeHTML(item.id)}">Edit</button><button class="danger" data-delete="${escapeHTML(item.id)}">Delete</button>` : ''}</td>
+        <td><div class="table-actions">${item.system ? '' : canManageRoles() ? `<button class="table-action" data-edit="${escapeHTML(item.id)}">Edit</button><button class="table-action danger" data-delete="${escapeHTML(item.id)}">Delete</button>` : ''}</div></td>
     </tr>`).join('') || '<tr><td colspan="6">No roles available for this tenant.</td></tr>';
 
     $('#permission-list').innerHTML = state.permissions.map(item => `<tr>
-        <td><code>${escapeHTML(item.value)}</code></td>
-        <td>${escapeHTML(item.description)}</td>
-    </tr>`).join('')
+        <td><strong>${escapeHTML(item.label)}</strong>${item.system ? ' <span class="badge">built-in</span>' : ''}</td>
+        <td><code>${escapeHTML(item.name)}</code></td>
+        <td>${escapeHTML(item.description || 'No description')}</td>
+        <td>${item.enforced ? 'Yes' : '<span class="muted">No</span>'}</td>
+        <td>${item.role_count}</td>
+        <td><div class="table-actions">${item.system || !canAdministerCatalog() ? '' : `<button class="table-action danger" data-delete-permission="${escapeHTML(item.name)}">Delete</button>`}</div></td>
+    </tr>`).join('') || '<tr><td colspan="6">No permissions in the catalog.</td></tr>'
 }
 
 function permissionCheckboxes(selected) {
     const held = new Set(selected || []);
     $('#role-permissions').innerHTML = state.permissions.map(item => `<label>
-        <input type="checkbox" name="permissions" value="${escapeHTML(item.value)}" ${held.has(item.value) ? 'checked' : ''}>
-        <span><strong>${escapeHTML(item.label)}</strong><br><small>${escapeHTML(item.description)}</small></span>
+        <input type="checkbox" name="permissions" value="${escapeHTML(item.name)}" ${held.has(item.name) ? 'checked' : ''}>
+        <span><strong>${escapeHTML(item.label)}</strong>${item.enforced ? '' : ' <small>(not enforced here)</small>'}<br><small>${escapeHTML(item.description || item.name)}</small></span>
     </label>`).join('')
 }
 
@@ -130,6 +134,29 @@ function openDialog(item) {
 }
 
 $('#new-role').addEventListener('click', () => openDialog(null));
+$('#new-permission').addEventListener('click', () => $('#permission-dialog').showModal());
+
+$('#permission-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = event.target;
+    try {
+        await api('/api/v1/permissions', {
+            method: 'POST',
+            body: JSON.stringify({
+                name: form.name.value.trim(),
+                label: form.label.value.trim(),
+                description: form.description.value.trim()
+            })
+        });
+        form.closest('dialog').close();
+        form.reset();
+        notice('Permission added to the catalog');
+        await loadPermissions();
+        render()
+    } catch (error) {
+        notice(error.message, true)
+    }
+});
 $$('.close').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
 
 $('#role-form').addEventListener('submit', async event => {
@@ -160,6 +187,19 @@ document.addEventListener('click', async event => {
         openDialog(state.roles.find(item => item.id === edit));
         return
     }
+    const removePermission = event.target.dataset.deletePermission;
+    if (removePermission) {
+        if (!confirm(`Delete the permission "${removePermission}"?`)) return;
+        try {
+            await api(`/api/v1/permissions/${encodeURIComponent(removePermission)}`, {method: 'DELETE'});
+            notice('Permission deleted');
+            await loadPermissions();
+            render()
+        } catch (error) {
+            notice(error.message, true)
+        }
+        return
+    }
     const remove = event.target.dataset.delete;
     if (remove) {
         const item = state.roles.find(role => role.id === remove);
@@ -175,19 +215,8 @@ document.addEventListener('click', async event => {
     }
 });
 
-const theme = $('#theme');
-theme.value = localStorage.getItem('gl-theme') || 'tokyo';
-document.documentElement.dataset.theme = theme.value;
-document.documentElement.dataset.mode = localStorage.getItem('gl-mode') || 'dark';
-theme.addEventListener('change', () => {
-    document.documentElement.dataset.theme = theme.value;
-    localStorage.setItem('gl-theme', theme.value)
-});
-$('#mode').addEventListener('click', () => {
-    const next = document.documentElement.dataset.mode === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.mode = next;
-    localStorage.setItem('gl-mode', next)
-});
+// The palette and appearance controls are the components shipped by the theme
+// service. See the note in app.js for why this file no longer drives them.
 $('#tenant-context').addEventListener('change', async event => {
     state.selectedTenant = event.target.value;
     await loadRoles();

@@ -8,7 +8,9 @@ services:
       POSTGRES_USER: goloose
       POSTGRES_PASSWORD: goloose
     volumes:
-      - ./data/db:/var/lib/postgresql/data
+      # A named volume keeps PostgreSQL's 0700 permissions away from the source
+      # tree; a host bind mount here makes `go build ./...` fail to walk data/.
+      - db-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U goloose -d goloose"]
       interval: 5s
@@ -47,6 +49,9 @@ services:
       local_dev_edge:
         aliases:
           - go-loose
+
+volumes:
+  db-data:
 
 networks:
   go_loose_network:

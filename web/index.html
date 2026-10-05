@@ -6,6 +6,12 @@
   <meta name="color-scheme" content="dark light">
   <title>Go Loose · API access control</title>
   <link rel="stylesheet" href="/assets/style.css">
+  <!-- The shared styling contract. Every palette, both appearances, in one
+       stylesheet, so switching is a change to an attribute rather than a request.
+       The origin is substituted by the server from GO_LOOSE_THEME_BASE_URL; when it
+       is unset the link is simply absent and this application's own theme blocks
+       take over unchanged. -->
+  <link rel="stylesheet" href="__GO_LOOSE_THEME_ORIGIN__/rt/v1/contract.css" data-theme-contract>
 </head>
 <body>
   <div class="noise"></div>
@@ -15,12 +21,13 @@
       <a href="/docs">API docs</a>
       <a href="/roles">Roles</a>
       <label class="compact">Tenant<select id="tenant-context"></select></label>
-      <label class="compact">Theme
-        <select id="theme"><option value="tokyo">Tokyo Night</option><option value="catppuccin">Catppuccin</option><option value="tomorrow">Tomorrow</option><option value="kanagawa">Kanagawa</option></select>
-      </label>
-      <button id="mode" class="icon-button" title="Toggle light/dark mode">◐</button>
-      <a id="identity" class="identity" href="/profile"><img id="identity-avatar" alt="" width="22" height="22" hidden><span id="identity-name"></span></a>
-      <form action="/auth/logout" method="post"><button class="ghost" type="submit">Log out</button></form>
+      <!-- The controls, injected rather than hand-written. They live in a shadow root
+           so this page's own CSS cannot reach them, and they read and write the same
+           data-theme and data-mode attributes the stylesheet blocks above key on, so
+           the values are already the ones this application was storing. -->
+      <bananas-theme-selector id="theme"></bananas-theme-selector>
+      <bananas-appearance-toggle id="mode"></bananas-appearance-toggle>
+      <div data-account-menu></div>
     </nav>
   </header>
 
@@ -92,6 +99,12 @@
   <dialog id="access-dialog"><form id="access-form"><div class="dialog-head"><h3>Manage user access</h3><button type="button" class="close">×</button></div><input type="hidden" name="user_id"><input type="hidden" name="tenant_id"><input type="hidden" name="approval_mode"><label id="approval-tenant-label" hidden>Tenant<select name="approval_tenant_id" class="tenant-select"></select></label><label>Role<select name="role_id" id="access-role" required></select></label><fieldset><legend>Applications</legend><div id="access-apps" class="check-list"></div></fieldset><button type="submit">Update access</button></form></dialog>
   <dialog id="secret-dialog"><div class="dialog-head"><h3 id="secret-title">Secret issued</h3><button type="button" class="close">×</button></div><p id="secret-description">This secret is shown once. Copy it now.</p><div class="secret"><code id="new-secret"></code><button id="copy-secret" type="button">Copy</button></div></dialog>
 
+  <script src="/assets/account.js" defer></script>
   <script src="/assets/app.js" defer></script>
+  <!-- Loaded from the theme service rather than vendored, so a change to the controls
+       needs no rebuild here. A module import is a CORS request, so this deployment's
+       origin must be in the service's CORS_ALLOWED_ORIGINS; a same-origin
+       deployment needs nothing configured. -->
+  <script type="module" src="__GO_LOOSE_THEME_ORIGIN__/rt/v1/components.js" data-bananas-components></script>
 </body>
 </html>

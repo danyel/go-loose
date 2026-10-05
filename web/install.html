@@ -8,16 +8,17 @@
     <div class="terminal-body">
       <p class="eyebrow">FIRST-RUN INSTALLER</p>
       <h1>Initialize<br><span>Go Loose.</span></h1>
-      <p class="muted">Configure Google identity and optionally create the Guess demonstration tenants. The client secret is encrypted before it reaches PostgreSQL.</p>
+      <p class="muted">Configure OIDC identity provider and optionally create the Guess demonstration tenants. The client secret is encrypted before it reaches PostgreSQL.</p>
       <form action="/install" method="post" class="installer-form">
         <input type="hidden" name="csrf_token" value="{{CSRF_TOKEN}}">
-        <label>Google OAuth client ID<input name="oidc_client_id" value="{{GOOGLE_CLIENT_ID}}" required></label>
-        <label>Google OAuth client secret<input type="password" name="oidc_client_secret" autocomplete="new-password" required></label>
-        <label>Authorized callback URL<input value="{{CALLBACK_URL}}" readonly></label>
+        <label>OIDC Issuer<input name="field1" value="https://accounts.google.com" required placeholder="https://accounts.google.com"></label>
+        <label>Client ID<input name="field2" autocomplete="new-password" required></label>
+        <label>Client Secret<input type="password" name="field3" autocomplete="new-password" required></label>
+        <label>Redirect URL<input name="field4" value="{{CALLBACK_URL}}" required></label>
         <label class="seed-option"><input type="checkbox" name="seed_demo" checked><span>Seed NMBS and YPTO Guess demo data</span></label>
         <button type="submit">INSTALL GO LOOSE</button>
       </form>
-      <p class="muted">In Google Cloud Console, add the callback URL above under Authorized redirect URIs. After installation you will continue to Google, then return to Go Loose with a secure signed session.</p>
+      <p class="muted">In your identity provider console, add the redirect URL above under Authorized redirect URIs. After installation you will continue to the provider, then return to Go Loose with a secure signed session.</p>
     </div>
   </main>
   <script>const t=localStorage.getItem('gl-theme')||'tokyo',m=localStorage.getItem('gl-mode')||'dark';document.documentElement.dataset.theme=t;document.documentElement.dataset.mode=m</script>

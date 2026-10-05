@@ -6,3 +6,5 @@ coverage.out
 google_secrets.json
 
 data/
+_data-old-bind-mount/
+dist/

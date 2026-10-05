@@ -46,7 +46,6 @@ async function load() {
     Object.assign(state, data);
     if (!state.tenants.some(tenant => tenant.id === state.selectedTenant)) state.selectedTenant = state.tenants[0]?.id || '';
     await loadRoles();
-    renderIdentity();
     render();
 }
 
@@ -67,18 +66,6 @@ async function loadRoles() {
     }
 }
 
-function renderIdentity() {
-    const profile = state.profile || {};
-    $('#identity-name').textContent = profile.display_name || profile.email || '';
-    const image = $('#identity-avatar');
-    if (profile.avatar_url) {
-        image.src = profile.avatar_url;
-        image.hidden = false
-    } else {
-        image.hidden = true;
-        image.removeAttribute('src')
-    }
-}
 
 // assignableRoles is what the invite and access dialogs may offer: the server
 // refuses to hand out a role more powerful than the caller's own, so offering
@@ -111,12 +98,12 @@ function render() {
     $('#user-count').textContent = tenantUsers.length + state.pending_users.length;
     $('#tenant-context').innerHTML = state.tenants.map(item => `<option value="${escapeHTML(item.id)}" ${item.id === tenantID ? 'selected' : ''}>${escapeHTML(item.name)}</option>`).join('');
     $('#new-tenant').hidden = !state.is_system_administrator;
-    $('#tenant-list').innerHTML = state.tenants.map(item => `<article class="card"><span class="badge">${escapeHTML(item.role)}</span><h3>${escapeHTML(item.name)}</h3><p>${escapeHTML(item.slug)}</p><div class="meta"><span>Tenant</span><code>${escapeHTML(item.id.slice(0, 8))}</code></div></article>`).join('') || empty('No tenants yet');
-    $('#app-list').innerHTML = tenantApps.map(item => `<article class="card"><span class="badge">${escapeHTML(item.tenant_slug)}</span><h3>${escapeHTML(item.name)}</h3><p>${escapeHTML(item.description || 'No description')}</p><div class="meta"><span>${item.client_ready ? 'Client login ready' : 'Client login not configured'}</span><code>${escapeHTML(item.client_id)}</code></div>${canManageApplications ? `<button class="card-action" data-client="${escapeHTML(item.id)}">Configure client login</button>` : ''}</article>`).join('') || empty('No applications yet');
-    $('#key-list').innerHTML = tenantKeys.map(item => `<tr><td>${escapeHTML(item.name)}</td><td>${escapeHTML(apps.get(item.application_id)?.name || '—')}</td><td><code>${escapeHTML(item.prefix)}…</code></td><td><span class="badge">${escapeHTML(item.status)}</span></td><td>${date(item.last_used_at)}</td><td>${canManageKeys && item.status === 'active' ? `<button class="danger" data-revoke="${escapeHTML(item.id)}">Revoke</button>` : ''}</td></tr>`).join('') || rowEmpty(6, 'No keys issued');
+    $('#tenant-list').innerHTML = state.tenants.map(item => `<article class="card"><span class="badge">${escapeHTML(item.role)}</span><h3>${escapeHTML(item.name)}</h3><div class="meta">${metaRow('Slug', item.slug)}${metaRow('Identifier', item.id.slice(0, 8), item.id)}</div></article>`).join('') || empty('No tenants yet');
+    $('#app-list').innerHTML = tenantApps.map(item => `<article class="card"><span class="badge">${escapeHTML(item.tenant_slug)}</span><h3>${escapeHTML(item.name)}</h3><p>${escapeHTML(item.description || 'No description')}</p><div class="meta">${metaRow('Client login', item.client_ready ? 'Ready' : 'Not configured')}${item.client_id ? metaRow('Client ID', item.client_id, item.client_id) : ''}</div>${canManageApplications ? `<button class="card-action" data-client="${escapeHTML(item.id)}">Configure client login</button>` : ''}</article>`).join('') || empty('No applications yet');
+    $('#key-list').innerHTML = tenantKeys.map(item => `<tr><td>${escapeHTML(item.name)}</td><td>${escapeHTML(apps.get(item.application_id)?.name || '—')}</td><td><code>${escapeHTML(item.prefix)}…</code></td><td><span class="badge">${escapeHTML(item.status)}</span></td><td>${date(item.last_used_at)}</td><td><div class="table-actions">${canManageKeys && item.status === 'active' ? `<button class="table-action danger" data-revoke="${escapeHTML(item.id)}">Revoke</button>` : ''}</div></td></tr>`).join('') || rowEmpty(6, 'No keys issued');
     $('#contract-list').innerHTML = tenantContracts.map(item => `<tr><td>${escapeHTML(apps.get(item.application_id)?.name || '—')}</td><td>${escapeHTML(item.version)}</td><td>${item.endpoint_count}</td><td>${item.source_url ? `<a href="${escapeHTML(item.source_url)}" target="_blank" rel="noreferrer">source</a>` : 'Pasted'}</td><td>${date(item.created_at)}</td></tr>`).join('') || rowEmpty(5, 'No contracts imported');
-    const pending = state.is_system_administrator ? state.pending_users.map(item => `<tr><td><strong>${escapeHTML(item.display_name)}</strong><br><small>${escapeHTML(item.email)}</small></td><td>Waiting room</td><td>—</td><td><span class="badge">pending</span></td><td>0</td><td><button class="card-action" data-pending="${escapeHTML(item.id)}">Approve</button></td></tr>`).join('') : '';
-    $('#user-list').innerHTML = tenantUsers.map(item => `<tr><td>${avatarCell(item)}<strong>${escapeHTML(item.display_name)}</strong><br><small>${escapeHTML(item.email)}</small></td><td>${escapeHTML(state.tenants.find(t => t.id === item.tenant_id)?.name || '—')}</td><td><span class="badge">${escapeHTML(roleLabel(item.role_id) || item.role)}</span></td><td>${escapeHTML(item.status)}</td><td>${item.application_ids.length}</td><td>${canManageUsers ? `<button class="card-action" data-access="${escapeHTML(item.id)}" data-tenant="${escapeHTML(item.tenant_id)}">Manage</button>` : ''}</td></tr>`).join('') + pending || rowEmpty(6, 'No users');
+    const pending = state.is_system_administrator ? state.pending_users.map(item => `<tr><td><strong>${escapeHTML(item.display_name)}</strong><br><small>${escapeHTML(item.email)}</small></td><td>Waiting room</td><td>—</td><td><span class="badge">pending</span></td><td>0</td><td><div class="table-actions"><button class="table-action" data-pending="${escapeHTML(item.id)}">Approve</button></div></td></tr>`).join('') : '';
+    $('#user-list').innerHTML = tenantUsers.map(item => `<tr><td>${avatarCell(item)}<strong>${escapeHTML(item.display_name)}</strong><br><small>${escapeHTML(item.email)}</small></td><td>${escapeHTML(state.tenants.find(t => t.id === item.tenant_id)?.name || '—')}</td><td><span class="badge">${escapeHTML(roleLabel(item.role_id) || item.role)}</span></td><td>${escapeHTML(item.status)}</td><td>${item.application_ids.length}</td><td><div class="table-actions">${canManageUsers ? `<button class="table-action" data-access="${escapeHTML(item.id)}" data-tenant="${escapeHTML(item.tenant_id)}">Manage</button>` : ''}</div></td></tr>`).join('') + pending || rowEmpty(6, 'No users');
     renderRoleOptions();
     $$('[data-tenant-application-action]').forEach(element => element.hidden = !canManageApplications);
     $$('[data-tenant-key-action]').forEach(element => element.hidden = !canManageKeys);
@@ -144,6 +131,12 @@ function renderRoleOptions() {
 }
 
 const empty = text => `<article class="card"><p>${text}</p></article>`;
+// One labelled pair in a card's footer. The value is the half that can be long --
+// a client identifier runs to forty-odd characters -- so it is the half allowed to
+// shrink and be truncated, with the whole value kept in the title for anyone who
+// needs to copy it.
+const metaRow = (label, value, title = value) =>
+    `<div><span>${escapeHTML(label)}</span><b title="${escapeHTML(title)}">${escapeHTML(value)}</b></div>`;
 const initials = name => String(name || '?').split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(part => part[0].toUpperCase()).join('') || '?';
 const avatarCell = item => item.avatar_url
     ? `<img class="avatar" src="${escapeHTML(item.avatar_url)}" alt="" width="28" height="28" loading="lazy">`
@@ -292,19 +285,16 @@ function showSecret(title, description, secret) {
     $('#secret-dialog').showModal()
 }
 
-const theme = $('#theme'), mode = $('#mode');
-theme.value = localStorage.getItem('gl-theme') || 'tokyo';
-document.documentElement.dataset.theme = theme.value;
-document.documentElement.dataset.mode = localStorage.getItem('gl-mode') || 'dark';
-theme.addEventListener('change', () => {
-    document.documentElement.dataset.theme = theme.value;
-    localStorage.setItem('gl-theme', theme.value)
-});
-mode.addEventListener('click', () => {
-    const next = document.documentElement.dataset.mode === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.mode = next;
-    localStorage.setItem('gl-mode', next)
-});
+// The palette and appearance controls are the components shipped by the theme
+// service, which own data-theme and data-mode on <html>. This file used to drive a
+// <select> and a button itself; that duplicated the same two attributes in a second
+// place, and whichever loaded last won.
+//
+// The storage key changes: the components persist under go-bananas:appearance rather
+// than gl-theme / gl-mode. A user's previous choice is therefore not carried over on
+// first load, and the page starts from the attributes already on <html> — the theme
+// these pages ship with. Migrating the old keys would be a nicety, not a
+// correctness fix, so it is not done here.
 $('#tenant-context').addEventListener('change', async event => {
     state.selectedTenant = event.target.value;
     await loadRoles();

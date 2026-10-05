@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="dark light">
   <title>Go Loose · Profile</title>
   <link rel="stylesheet" href="/assets/style.css">
+  <link rel="stylesheet" href="__GO_LOOSE_THEME_ORIGIN__/rt/v1/contract.css" data-theme-contract>
 </head>
 <body class="profile-page">
   <div class="noise"></div>
@@ -15,11 +16,9 @@
       <a href="/">Console</a>
       <a href="/docs">API docs</a>
       <a href="/roles">Roles</a>
-      <label class="compact">Theme
-        <select id="theme"><option value="tokyo">Tokyo Night</option><option value="catppuccin">Catppuccin</option><option value="tomorrow">Tomorrow</option><option value="kanagawa">Kanagawa</option></select>
-      </label>
-      <button id="mode" class="icon-button" title="Toggle light/dark mode">◐</button>
-      <form action="/auth/logout" method="post"><button class="ghost" type="submit">Log out</button></form>
+      <bananas-theme-selector id="theme"></bananas-theme-selector>
+      <bananas-appearance-toggle id="mode"></bananas-appearance-toggle>
+      <div data-account-menu></div>
     </nav>
   </header>
 
@@ -75,6 +74,8 @@
     </section>
   </main>
 
+  <script src="/assets/account.js" defer></script>
   <script src="/assets/profile.js" defer></script>
+  <script type="module" src="__GO_LOOSE_THEME_ORIGIN__/rt/v1/components.js" data-bananas-components></script>
 </body>
 </html>
