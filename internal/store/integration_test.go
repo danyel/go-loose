@@ -542,3 +542,128 @@ func contains(values []string, want string) bool {
 	}
 	return false
 }
+
+// TestBootstrapGrantsOwnershipOnlyWhileTheTenantHasNone pins the rule that a
+// bootstrapped account becomes a tenant's owner only when nobody owns it yet. The
+// installer's demonstration seed creates tenants that already hold members, and
+// refusing ownership there used to leave a local administrator with an account
+// that could never reach the console.
+func TestBootstrapGrantsOwnershipOnlyWhileTheTenantHasNone(t *testing.T) {
+	s, db, ctx := integrationStore(t)
+	owner := newUser(t, s, ctx, "owner@example.test")
+	tenant := newTenant(t, s, ctx, owner, "bootstrap")
+	// Leave the tenant holding administrators but no owner, which is the state the
+	// installer's demonstration seed produces.
+	adminRole, err := s.SystemRoleID(ctx, "admin")
+	if err != nil {
+		t.Fatalf("look up the admin role: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE memberships SET role_id = $1 WHERE tenant_id = $2`, adminRole, tenant.ID); err != nil {
+		t.Fatalf("demote the owner: %v", err)
+	}
+	addMember(t, s, ctx, owner, tenant.ID, "member@example.test", "admin")
+	late := newUser(t, s, ctx, "late@example.test")
+
+	if err := s.Bootstrap(ctx, late, tenant.Slug, "guess"); err != nil {
+		t.Fatalf("bootstrap into a tenant with no owner: %v", err)
+	}
+	assertRole(t, db, ctx, late, tenant.ID, "owner")
+
+	// A further account must not displace the owner that now exists.
+	third := newUser(t, s, ctx, "third@example.test")
+	if err := s.Bootstrap(ctx, third, tenant.Slug, "guess"); err != nil {
+		t.Fatalf("bootstrap again: %v", err)
+	}
+	var memberships int
+	if err := db.QueryRowContext(ctx, `
+		SELECT count(*) FROM memberships m
+		JOIN roles r ON r.id = m.role_id
+		WHERE m.tenant_id = $1 AND r.slug = 'owner'`, tenant.ID).Scan(&memberships); err != nil {
+		t.Fatalf("count owners: %v", err)
+	}
+	if memberships != 1 {
+		t.Errorf("owners = %d, want exactly one", memberships)
+	}
+	var thirdMemberships int
+	if err := db.QueryRowContext(ctx,
+		`SELECT count(*) FROM memberships WHERE user_id = $1`, third).Scan(&thirdMemberships); err != nil {
+		t.Fatalf("count memberships: %v", err)
+	}
+	if thirdMemberships != 0 {
+		t.Errorf("a later bootstrap joined a tenant that already had an owner")
+	}
+}
+
+func assertRole(t *testing.T, db *sql.DB, ctx context.Context, userID, tenantID, want string) {
+	t.Helper()
+	var got string
+	err := db.QueryRowContext(ctx, `
+		SELECT r.slug FROM memberships m JOIN roles r ON r.id = m.role_id
+		WHERE m.user_id = $1 AND m.tenant_id = $2`, userID, tenantID).Scan(&got)
+	if err != nil {
+		t.Fatalf("read membership: %v", err)
+	}
+	if got != want {
+		t.Errorf("role = %q, want %q", got, want)
+	}
+}
+
+// TestCreateTenantReportsADuplicateSlug pins that a slug already in use is a
+// conflict the caller can act on rather than an opaque server error.
+func TestCreateTenantReportsADuplicateSlug(t *testing.T) {
+	s, _, ctx := integrationStore(t)
+	owner := newUser(t, s, ctx, "owner@example.test")
+	newTenant(t, s, ctx, owner, "nmbs")
+	if _, err := s.CreateTenant(ctx, owner, "nmbs", "Duplicate"); !errors.Is(err, store.ErrTenantSlugTaken) {
+		t.Fatalf("CreateTenant with a used slug = %v, want ErrTenantSlugTaken", err)
+	}
+}
+
+// TestConcurrentMigrationRunsDoNotCollide pins that instances starting together
+// against an empty database all succeed. CREATE TABLE IF NOT EXISTS is not race
+// free in PostgreSQL, so the run is serialised with an advisory lock.
+func TestConcurrentMigrationRunsDoNotCollide(t *testing.T) {
+	databaseURL := os.Getenv("GO_LOOSE_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set GO_LOOSE_TEST_DATABASE_URL to run PostgreSQL integration tests")
+	}
+	requireScratchDatabase(t, databaseURL)
+	resetSchema(context.Background(), mustOpen(t, databaseURL))
+
+	const instances = 4
+	connections := make([]*sql.DB, instances)
+	for index := range connections {
+		connections[index] = mustOpen(t, databaseURL)
+	}
+	errs := make(chan error, instances)
+	for _, connection := range connections {
+		go func(conn *sql.DB) { errs <- database.Migrate(context.Background(), conn) }(connection)
+	}
+	for range connections {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent Migrate: %v", err)
+		}
+	}
+	for _, connection := range connections {
+		var applied int
+		if err := connection.QueryRowContext(context.Background(),
+			`SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
+			t.Errorf("count migrations: %v", err)
+			continue
+		}
+		if applied == 0 {
+			t.Error("no migration was recorded")
+		}
+	}
+}
+
+func mustOpen(t *testing.T, databaseURL string) *sql.DB {
+	t.Helper()
+	db, err := database.Open(context.Background(), databaseURL)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}

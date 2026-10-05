@@ -37,6 +37,8 @@ The provider must return `sub`, `email`, and preferably `name` claims.
 
 Migration files live in `internal/database/migrations` and are embedded into the binary. Files run lexicographically once, in individual transactions.
 
+A migration run holds a session-level advisory lock, so several replicas may start at the same time against one database. Without it the run races with itself: PostgreSQL's `CREATE TABLE IF NOT EXISTS` is not race free and can fail with a duplicate `pg_type` row, and two replicas can try to apply the same file. The second replica waits and then finds the work already recorded.
+
 Create upgrades with an immutable numbered file:
 
 ```text

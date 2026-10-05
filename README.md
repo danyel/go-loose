@@ -83,7 +83,15 @@ Development requires Go 1.27.1 or newer.
 
 Migrations run transactionally at startup and are tracked in `schema_migrations`. See the operations guide before creating one.
 
-`make integration-db` creates the two scratch databases the database-backed tests use, and `make integration-test` runs them. Those tests drop every table they touch, so they refuse to run against a database whose name does not contain `test`. That guard exists because pointing them at a development database destroys it.
+`make test` runs the unit tests and needs nothing. `make integration-db` creates the scratch databases the database-backed tests use, and `make integration-test` runs them. Those tests drop every table they touch, so they refuse to run against a database whose name does not contain `test`. That guard exists because pointing them at a development database destroys it.
+
+### Behaviour suite
+
+`make behaviour-test` drives the whole application over real HTTP against a real PostgreSQL database. It resets the database, installs the application through the web installer using the Google client credentials in `google_secrets.json`, signs in, walks every flow, then replaces the process and checks that the installation, tenants, applications, contracts, roles, sessions, profile, and picture are all still there. It resets the database again afterwards.
+
+The suite is skipped by `go test ./...` because it needs that credentials file and a scratch database. Set `GO_LOOSE_BEHAVIOUR_CLIENT_ID` and `GO_LOOSE_BEHAVIOUR_CLIENT_SECRET` instead of the file if you prefer. The one step it cannot automate is Google's interactive consent screen: it verifies the redirect to Google carries the installed client id and redirect URI, but completing the round trip needs a real Google account.
+
+Phases live in `internal/behaviour`, one file per area, and share a single ordered journey so each step can use what the previous one created.
 
 ### Hot reload
 

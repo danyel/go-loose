@@ -33,7 +33,9 @@ Later requests to `/install` redirect to login, and duplicate submissions are re
 
 ## First administrator and waiting room
 
-The first user who completes Google SSO becomes the system administrator. A PostgreSQL advisory transaction lock makes this first-user claim atomic when multiple users sign in concurrently. The system administrator receives owner access to every tenant and application that exists at that moment.
+The first user who completes Google SSO becomes the system administrator. A PostgreSQL advisory transaction lock makes this first-user claim atomic when multiple users sign in concurrently. The system administrator receives owner access to every tenant that exists at that moment.
+
+Owning a tenant is what lets the administrator administer it; it does not let them sign in to the applications running inside it. Access to a client application is always an explicit grant, so an administrator who wants to use one attaches themselves from **Users & access** like anybody else. The grant is visible, attributable and revocable, and revoking it signs them out of that application without affecting their console access.
 
 Later first-time SSO users are created without tenant membership. Their management page shows only the waiting room. A system administrator approves a waiting user from **Users & access**, selecting:
 
@@ -78,3 +80,14 @@ An application must first have exact redirect URIs and a generated client secret
 Existing deployments may continue to supply all three `GO_LOOSE_OIDC_ISSUER`, `GO_LOOSE_OIDC_CLIENT_ID`, and `GO_LOOSE_OIDC_CLIENT_SECRET` variables. Go Loose treats that as an already configured deployment and bypasses the installer. Supplying `GO_LOOSE_LOCAL_LOGIN=true` together with a non-empty `GO_LOOSE_LOCAL_ADMIN_PASSWORD` does the same for a database-only development deployment.
 
 For new installations, prefer the web installer. `GO_LOOSE_LOCAL_LOGIN=true` without a bootstrap password enables seeded and invited database users but does not bypass installation.
+
+Two rules make that second mode usable rather than merely possible:
+
+- The local administrator claims the system administrator role when the installation has none. Creating tenants and approving waiting-room users both require that role, and only a first Google sign-in otherwise grants it, so a database-only deployment would otherwise have nobody able to do either. The claim is a no-op once any system administrator exists, so an installation already owned by a Google account is untouched.
+- Bootstrapping grants ownership of a tenant only while that tenant has no owner. It deliberately does not care whether the tenant has other members, because the demonstration seed creates tenants holding administrators but no owner; refusing ownership there would leave a local administrator bootstrapped afterwards with an account that can never reach the console. A tenant that already has an owner is never taken over.
+
+Supplying `GO_LOOSE_LOCAL_ADMIN_PASSWORD` after a Google account has already claimed the role changes nothing.
+
+## Verifying an installation
+
+`make behaviour-test` installs the application into an empty database, signs in, walks every flow, and then restarts the process to confirm that everything was persisted rather than held in memory. See the [README](../README.md#behaviour-suite) for what it needs.

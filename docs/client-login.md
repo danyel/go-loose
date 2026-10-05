@@ -170,6 +170,13 @@ A user with no membership in the application's tenant still authenticates, but f
   the client applications stop accepting their tokens on the next request. See
   [Signing out across the family](#signing-out-across-the-family).
 - API-key authentication and browser-user authentication are independent. Use `client.Middleware` for service/API keys and `BrowserAuth.Middleware` for logged-in users.
+- **A `user_application_access` grant is the only thing that admits a person to your
+  application.** The system administrator is not an exception: they own every tenant,
+  which is what lets them administer it, but ownership does not sign them in here.
+  Nobody, administrator included, reaches your application without a grant recorded
+  against your `client_id`. If support needs to see the application as a user, grant
+  it deliberately from **Users & access** so it is attributable and revocable, rather
+  than assuming the administrator is already inside.
 
 ## Signing out across the family
 

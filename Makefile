@@ -14,13 +14,16 @@ GO_LOOSE_DEV_PORT ?= 8080
 
 export
 
-.PHONY: build test integration-db integration-test run compose-up compose-down compose-dev-up compose-dev-down compose-dev-logs fmt vet
+.PHONY: build test integration-db integration-test behaviour-test run compose-up compose-down compose-dev-up compose-dev-down compose-dev-logs fmt vet
 
 build:
 	go build ./...
 
+# The database-backed suites drop every table they touch, so `test` runs without
+# them. Each suite skips itself when its variable is empty, which keeps a
+# developer without PostgreSQL from being blocked; `integration-test` sets them.
 test:
-	go test -race ./...
+	GO_LOOSE_TEST_DATABASE_URL= GO_LOOSE_TEST_SERVER_DATABASE_URL= go test -race ./...
 
 # Integration tests drop every table they touch, so they only run against scratch
 # databases. Both test helpers refuse any database whose name lacks "test", and
@@ -33,14 +36,28 @@ test:
 GO_LOOSE_TEST_DATABASE_URL ?= postgres://goloose:goloose@localhost:5433/goloose_test?sslmode=disable
 GO_LOOSE_TEST_SERVER_DATABASE_URL ?= postgres://goloose:goloose@localhost:5433/goloose_server_test?sslmode=disable
 
+# The behaviour suite drives the whole application over HTTP and needs the Google
+# client credentials for the installer. It reads ../google_secrets.json, or the
+# variables below, and skips when neither is present.
+GO_LOOSE_BEHAVIOUR_DATABASE_URL ?= postgres://goloose:goloose@localhost:5433/goloose_behaviour_test?sslmode=disable
+
 # createdb is not idempotent, so ignore a database that is already there.
 integration-db:
 	-docker compose exec -T postgres createdb -U goloose goloose_test
 	-docker compose exec -T postgres createdb -U goloose goloose_server_test
+	-docker compose exec -T postgres createdb -U goloose goloose_behaviour_test
 
 integration-test:
 	@test -n "$(GO_LOOSE_TEST_DATABASE_URL)" || { echo "set GO_LOOSE_TEST_DATABASE_URL to a scratch database"; exit 1; }
 	go test -race ./internal/store/ ./internal/server/ -count=1
+
+# Installs the application into an empty database, walks every flow, restarts the
+# process, and checks that everything is still there. Leaves the database empty
+# again so the next run starts from nothing.
+behaviour-test:
+	GO_LOOSE_BEHAVIOUR=1 go test ./internal/behaviour/ -count=1 -v
+	-docker compose exec -T postgres psql -q -U goloose -d goloose_behaviour_test \
+		-c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;' >/dev/null
 
 run:
 	go run ./cmd/go-loose

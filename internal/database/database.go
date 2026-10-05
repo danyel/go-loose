@@ -32,7 +32,45 @@ func Open(ctx context.Context, databaseURL string) (*sql.DB, error) {
 	return db, nil
 }
 
+// migrationLockKey serialises migration runs between instances of this service.
+// It is deliberately distinct from the advisory lock used to claim the first
+// system administrator.
+const migrationLockKey int64 = 554628171918
+
+// querier is the subset of database/sql that migrations need, satisfied by both
+// *sql.DB and *sql.Conn.
+type querier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
+// Migrate brings the schema up to date.
+//
+// The whole run holds a session-level advisory lock, because PostgreSQL's
+// CREATE TABLE IF NOT EXISTS is not race free: two instances starting against an
+// empty database at the same time can collide on the pg_type unique index and one
+// of them fails. The same race would let two instances apply the same migration
+// concurrently. Rolling a deployment with more than one replica is enough to
+// trigger it.
 func Migrate(ctx context.Context, db *sql.DB) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("reserve migration connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrationLockKey); err != nil {
+		return fmt.Errorf("lock migrations: %w", err)
+	}
+	// The unlock runs on a context detached from the caller's, so an application
+	// shutting down mid-migration still releases the lock for the next instance.
+	defer func() {
+		_, _ = conn.ExecContext(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, migrationLockKey)
+	}()
+	return applyMigrations(ctx, conn)
+}
+
+func applyMigrations(ctx context.Context, db querier) error {
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version text PRIMARY KEY,
 		applied_at timestamptz NOT NULL DEFAULT now()
