@@ -232,6 +232,102 @@ func clientLoginPhases(t *testing.T, j *journey) {
 		statusOnly(t, replay, http.StatusUnauthorized)
 	})
 
+	phase(t, "a second application is signed in without asking again", func(t *testing.T) {
+		// The single sign-on property: once Go Loose holds a session for this person
+		// in this tenant, another application on the same tenant must receive a
+		// code straight away, with no sign-in page in between.
+		type application struct {
+			ID          string   `json:"id"`
+			ClientID    string   `json:"client_id"`
+			RedirectURI []string `json:"redirect_uris"`
+		}
+		type setupResponse struct {
+			Application application `json:"application"`
+			Secret      string      `json:"client_secret"`
+		}
+		created := decode[application](t, j.admin.json(http.MethodPost, host, "/api/v1/applications", map[string]any{
+			"tenant_id": j.scopedTenantID, "slug": "second-app", "name": "Second App",
+			"allowed_hosts": []string{"second.example.test"},
+		}), http.StatusCreated)
+		setup := decode[setupResponse](t, j.admin.json(http.MethodPost, host,
+			"/api/v1/applications/"+created.ID+"/client-config", map[string]any{
+				"redirect_uris": []string{"https://second.example.test/callback"},
+			}), http.StatusOK)
+		if setup.Application.ClientID == "" || setup.Secret == "" {
+			t.Fatal("the second application was not configured for client login")
+		}
+
+		// The member needs access to it, the same as any other application.
+		access := j.admin.json(http.MethodPut, host, "/api/v1/users/"+j.memberID+"/access", map[string]any{
+			"tenant_id": j.scopedTenantID, "role_id": j.viewerRoleID,
+			"application_ids": []string{j.applicationID, created.ID},
+		})
+		if access.StatusCode != http.StatusNoContent {
+			t.Fatalf("grant the second application = %d: %s", access.StatusCode, bodyOf(t, access))
+		}
+
+		// Sign in once, through the first application.
+		browser := j.browser()
+		tenantHost := j.h.tenantHost(j.scopedTenant)
+		firstQuery := "response_type=code&client_id=" + j.clientID +
+			"&redirect_uri=" + url.QueryEscape(redirectURI) + "&state=first"
+		signIn := location(t, browser.get(tenantHost, "/connect/authorize?"+firstQuery, nil))
+		token := csrfFrom(t, bodyOf(t, browser.get(tenantHost, signIn, nil)))
+		response := browser.form(tenantHost, "/auth/password", neturlValues(map[string]string{
+			"csrf_token": token, "email": j.memberEmail, "password": j.memberPassword,
+			"return": returnParam(t, signIn),
+		}), nil)
+		if response.StatusCode != http.StatusSeeOther {
+			t.Fatalf("sign-in = %d: %s", response.StatusCode, bodyOf(t, response))
+		}
+		if response := browser.get(tenantHost, "/connect/authorize?"+firstQuery, nil); response.StatusCode != http.StatusFound {
+			t.Fatalf("first application = %d", response.StatusCode)
+		} else {
+			response.Body.Close()
+		}
+
+		// The second application must not see a sign-in page.
+		secondQuery := "response_type=code&client_id=" + setup.Application.ClientID +
+			"&redirect_uri=" + url.QueryEscape("https://second.example.test/callback") + "&state=second"
+		response = browser.get(tenantHost, "/connect/authorize?"+secondQuery, nil)
+		if response.StatusCode != http.StatusFound {
+			t.Fatalf("second application = %d, want a code with no prompt: %s",
+				response.StatusCode, bodyOf(t, response))
+		}
+		callback, err := url.Parse(location(t, response))
+		if err != nil {
+			t.Fatalf("parse callback: %v", err)
+		}
+		if callback.Host != "second.example.test" {
+			t.Errorf("callback host = %q", callback.Host)
+		}
+		if callback.Query().Get("code") == "" {
+			t.Error("no authorization code for the second application")
+		}
+		if callback.Query().Get("state") != "second" {
+			t.Errorf("state = %q", callback.Query().Get("state"))
+		}
+
+		// And it identifies the same person, with no further prompt.
+		exchange := j.browser().request(http.MethodPost, j.h.apex(), "/connect/token",
+			strings.NewReader(url.Values{
+				"grant_type": {"authorization_code"}, "code": {callback.Query().Get("code")},
+				"redirect_uri": {"https://second.example.test/callback"},
+			}.Encode()), map[string]string{
+				"Content-Type":  "application/x-www-form-urlencoded",
+				"Authorization": "Basic " + basicAuth(setup.Application.ClientID, setup.Secret),
+			})
+		type secondToken struct {
+			User struct {
+				Email string `json:"email"`
+			} `json:"user"`
+		}
+		granted := decode[secondToken](t, exchange, http.StatusOK)
+		if granted.User.Email != j.memberEmail {
+			t.Errorf("the second application saw %q, want %s", granted.User.Email, j.memberEmail)
+		}
+	})
+
 	phase(t, "the token identifies the user at the userinfo endpoint", func(t *testing.T) {
 		type identity struct {
 			ID          string   `json:"id"`

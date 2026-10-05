@@ -1,8 +1,11 @@
 package server
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/danyel/go-loose/web"
 )
 
 // The theme origin is substituted into every HTML page. These tests cover the two
@@ -88,4 +91,80 @@ func TestThemeOriginLeavesNonThemePagesAlone(t *testing.T) {
 	if got := applyThemeOrigin(plain, ""); string(got) != string(plain) {
 		t.Errorf("a page without theme lines was modified:\n%s", got)
 	}
+}
+
+// contractBackedTokens maps this application's own colour token onto the shared
+// contract role that carries the same meaning. The right-hand side is a bare role
+// name because the variable prefix belongs to the contract.
+var contractBackedTokens = map[string]string{
+	"--bg":      "bg",
+	"--surface": "surface",
+	// go-loose's second surface step is the contract's raised surface.
+	"--surface2": "surface-raised",
+	"--text":     "text",
+	"--muted":    "muted",
+	"--accent":   "accent",
+	// go-loose's secondary accent is the contract's secondary role: for every
+	// palette the two agree, tokyo's #bb9af7 and catppuccin's #cba6f7 among them.
+	"--accent2": "secondary",
+	"--good":    "good",
+	"--danger":  "danger",
+	"--border":  "border",
+}
+
+// TestLocalTokensAdoptTheContractWhereItIsServed covers the difference between a
+// theme selector that is present in the page and one that works.
+//
+// Every palette this application names has to resolve through the contract's
+// variables, with this application's own value as the fallback. The fallback is
+// what keeps the install and login pages styled as they always were: they never load
+// the contract, so the variable is undefined there and the literal applies. Loading
+// the contract on a console page therefore adopts the shared palette without
+// changing anything for the pages that do not ask for it.
+//
+// Both directions are asserted. Adopting the role is not enough on its own: a single
+// declaration left holding a bare literal overrides the contract for whichever
+// palette that block names, and the console then renders half shared and half local.
+func TestLocalTokensAdoptTheContractWhereItIsServed(t *testing.T) {
+	css, err := web.Files.ReadFile("style.css")
+	if err != nil {
+		t.Fatalf("style.css must be embedded: %v", err)
+	}
+	stylesheet := string(css)
+
+	for token, role := range contractBackedTokens {
+		if !strings.Contains(stylesheet, fmt.Sprintf("%s:var(--bn-%s,", token, role)) {
+			t.Errorf("token %s does not adopt --bn-%s, so selecting a palette outside this application's own four changes nothing:\n%s",
+				token, role, firstLines(css, 8))
+		}
+		// A literal assignment anywhere would win for the palette it sits under, and
+		// the contract's value for that one palette would be discarded.
+		if literal := token + ":#"; strings.Contains(stylesheet, literal) {
+			t.Errorf("token %s is still assigned a bare literal, which overrides the contract for the palette that block names:\n%s",
+				token, firstLines(css, 8))
+		}
+	}
+}
+
+// TestTheShadowTokenIsNotMapped guards the one token deliberately left alone.
+// The contract's shadow family holds complete box-shadow values, and this token
+// holds a colour, so wiring them together would substitute a shadow for a colour.
+func TestTheShadowTokenIsNotMapped(t *testing.T) {
+	css, err := web.Files.ReadFile("style.css")
+	if err != nil {
+		t.Fatalf("style.css must be embedded: %v", err)
+	}
+	if strings.Contains(string(css), "--shadow:var(--bn-") {
+		t.Error("--shadow is a colour here and the contract's shadow roles are box-shadow values; mapping them would break every elevation")
+	}
+}
+
+// firstLines trims a stylesheet for an error message, since the token blocks sit at
+// the top of the file and the whole of it is noise in a test failure.
+func firstLines(css []byte, n int) string {
+	lines := strings.SplitN(string(css), "\n", n+1)
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, "\n")
 }

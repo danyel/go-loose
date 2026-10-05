@@ -5,14 +5,7 @@
     "version": "0.1.0",
     "description": "Multi-tenant API-key management and runtime authorization."
   },
-  "servers": [{"url": "/"}],
   "components": {
-    "securitySchemes": {
-      "session": {"type": "apiKey", "in": "cookie", "name": "go_loose_session"},
-      "apiKey": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
-      "clientBasic": {"type": "http", "scheme": "basic"},
-      "userBearer": {"type": "http", "scheme": "bearer"}
-    },
     "schemas": {
       "Error": {"type": "object", "properties": {"error": {"type": "string"}}},
       "AuthorizationRequest": {

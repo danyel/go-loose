@@ -98,6 +98,13 @@ func (s *Store) Install(ctx context.Context, installation Installation, demoUser
 	return tx.Commit()
 }
 
+// ClaimFirstSystemAdministrator promotes the first user to sign in to system
+// administrator and gives them ownership of every tenant that exists at that
+// moment. It is a no-op once an administrator exists.
+//
+// It grants console reach across the installation and nothing more: no
+// application grant, so the new administrator cannot sign in to a tenant
+// application until one is deliberately given to them.
 func (s *Store) ClaimFirstSystemAdministrator(ctx context.Context, userID string) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -124,11 +131,14 @@ func (s *Store) ClaimFirstSystemAdministrator(ctx context.Context, userID string
 		ON CONFLICT DO NOTHING`, userID); err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO user_application_access(application_id, user_id, granted_by)
-		SELECT a.id, $1, $1 FROM applications a ON CONFLICT DO NOTHING`, userID); err != nil {
-		return false, err
-	}
+	// Deliberately no application grant. Owning every tenant is what lets the
+	// administrator administer it; it is not a licence to enter the applications
+	// running inside it. Access to a client application is only ever an explicit
+	// grant, so an administrator who wants to use one attaches themselves the same
+	// way anybody else does, visibly, from the console, and it can be withdrawn
+	// again without touching the tenant. Granting it here instead would hand every
+	// installation a standing administrator account inside every customer
+	// application, which is the opposite of the boundary this product draws.
 	return true, tx.Commit()
 }
 
